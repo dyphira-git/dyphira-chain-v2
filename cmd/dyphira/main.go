@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"os"
 	"strconv"
+	"strings"
 
 	"dyphira-node/consensus"
 	"dyphira-node/core"
@@ -16,6 +17,17 @@ import (
 	// "dyphira/network" // Temporarily disabled
 	"dyphira-node/types"
 )
+
+// parseAddress parses an address from either hex or Bech32 format
+func parseAddress(addrStr string) (crypto.Address, error) {
+	// Check if it's a Bech32 address (starts with "dyp_")
+	if strings.HasPrefix(addrStr, "dyp_") {
+		return crypto.Bech32ToAddress(addrStr)
+	}
+
+	// Otherwise, try to parse as hex address
+	return crypto.AddressFromString(addrStr)
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -115,12 +127,17 @@ func createAccount(args []string) {
 	}
 
 	address := keyPair.GetAddress()
+	bech32Address, err := keyPair.GetBech32Address()
+	if err != nil {
+		log.Fatalf("Failed to generate Bech32 address: %v", err)
+	}
 
 	// Create account info
 	accountInfo := map[string]interface{}{
-		"address":     address.String(),
-		"public_key":  fmt.Sprintf("%x", keyPair.PublicKey.X.Bytes()),
-		"private_key": fmt.Sprintf("%x", keyPair.PrivateKey.D.Bytes()),
+		"address":        address.String(),
+		"bech32_address": bech32Address,
+		"public_key":     fmt.Sprintf("%x", keyPair.PublicKey.X.Bytes()),
+		"private_key":    fmt.Sprintf("%x", keyPair.PrivateKey.D.Bytes()),
 	}
 
 	// Output as JSON
@@ -145,12 +162,12 @@ func sendTransaction(args []string) {
 	}
 
 	// Parse addresses (from address not used in this simplified version)
-	_, err := crypto.AddressFromString(*fromAddr)
+	_, err := parseAddress(*fromAddr)
 	if err != nil {
 		log.Fatalf("Invalid from address: %v", err)
 	}
 
-	to, err := crypto.AddressFromString(*toAddr)
+	to, err := parseAddress(*toAddr)
 	if err != nil {
 		log.Fatalf("Invalid to address: %v", err)
 	}
@@ -191,7 +208,7 @@ func getBalance(args []string) {
 	}
 
 	// Parse address
-	addr, err := crypto.AddressFromString(*address)
+	addr, err := parseAddress(*address)
 	if err != nil {
 		log.Fatalf("Invalid address: %v", err)
 	}
@@ -209,10 +226,17 @@ func getBalance(args []string) {
 		log.Fatalf("Failed to get account: %v", err)
 	}
 
+	// Convert to Bech32 for display
+	bech32Addr, err := crypto.AddressToBech32(addr, "dyp_")
+	if err != nil {
+		log.Fatalf("Failed to convert address to Bech32: %v", err)
+	}
+
 	balanceInfo := map[string]interface{}{
-		"address": addr.String(),
-		"balance": account.Balance.String(),
-		"nonce":   account.Nonce,
+		"address":        addr.String(),
+		"bech32_address": bech32Addr,
+		"balance":        account.Balance.String(),
+		"nonce":          account.Nonce,
 	}
 
 	output, err := json.MarshalIndent(balanceInfo, "", "  ")

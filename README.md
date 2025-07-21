@@ -8,7 +8,7 @@ A high-performance L1 blockchain implementation in Go featuring Delegated Proof 
 - **Binary Merkle Trie**: Efficient state management using modified Ethereum Patricia Trie
 - **LevelDB Storage**: Persistent storage for blockchain data
 - **LibP2P Networking**: Peer-to-peer communication using GossipSub
-- **secp256k1 Cryptography**: ECDSA signatures and address derivation
+- **secp256k1 Cryptography**: ECDSA signatures and address derivation using Whirlpool + RIPEMD-160 + Bech32
 - **CLI Interface**: Command-line tools for node management and interaction
 
 ## Architecture
@@ -83,6 +83,28 @@ make build-windows
 
 # Send a transaction
 ./bin/dyphira-node send --from <from-addr> --to <to-addr> --value <amount> --private-key <key>
+
+### Address Format
+
+The Dyphira blockchain supports two address formats:
+
+1. **Hex Format**: Traditional 40-character hexadecimal address (e.g., `addeb7fc2bf7d41cc358f55180b1fe9905bf08f6`)
+2. **Bech32 Format**: Human-readable address with checksum (e.g., `dyp_14h0t0lpt7l2pes6c74gcpv07nyzm7z8kepmm5r`)
+
+Both formats are interchangeable and can be used in all CLI commands. The Bech32 format is recommended for better user experience and error detection.
+
+### Address Generation Algorithm
+
+Addresses are generated using the following process:
+
+1. **Public Key**: Start with a secp256k1 public key
+2. **Whirlpool Hash**: Apply Whirlpool hash function to the public key
+3. **Truncate**: Take the first 256 bits (32 bytes) of the Whirlpool hash
+4. **RIPEMD-160**: Apply RIPEMD-160 hash to the truncated result
+5. **Address**: The 20-byte RIPEMD-160 hash becomes the raw address
+6. **Bech32 Encoding**: Optionally encode the address using Bech32 with "dyp_" prefix
+
+This approach provides enhanced security through the use of Whirlpool's 512-bit hash function while maintaining compatibility with existing blockchain infrastructure.
 ```
 
 ### Blockchain Interaction
@@ -132,13 +154,13 @@ make test
 
 ### Development Workflow
 
-1. **Phase 1**: Core Implementation ✅
+1. **Phase 1**: Core Implementation
    - Cryptographic primitives
    - Merkle Trie state DB
    - Block/transaction structures
    - Basic networking layer
 
-2. **Phase 2**: Consensus Engine ✅
+2. **Phase 2**: Consensus Engine
    - Validator election
    - Block proposal logic
    - Approval collection system

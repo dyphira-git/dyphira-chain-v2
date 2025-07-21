@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"math/big"
 
+	"github.com/btcsuite/btcutil/bech32"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/jzelinskie/whirlpool"
 	"golang.org/x/crypto/ripemd160"
 )
 
@@ -45,14 +47,19 @@ func GenerateKeyPair() (*KeyPair, error) {
 	}, nil
 }
 
-// PubToAddress derives an address from a public key using SHA256 + RIPEMD160
+// PubToAddress derives an address from a public key using Whirlpool + RIPEMD160
 func PubToAddress(pubKey []byte) Address {
-	// First hash with SHA256
-	sha256Hash := sha256.Sum256(pubKey)
+	// First hash with Whirlpool
+	whirlpoolHash := whirlpool.New()
+	whirlpoolHash.Write(pubKey)
+	whirlpoolResult := whirlpoolHash.Sum(nil)
+
+	// Take the first 256 bits (32 bytes) from Whirlpool result
+	whirlpool256 := whirlpoolResult[:32]
 
 	// Then hash with RIPEMD160
 	ripemd160Hash := ripemd160.New()
-	ripemd160Hash.Write(sha256Hash[:])
+	ripemd160Hash.Write(whirlpool256)
 	ripeHash := ripemd160Hash.Sum(nil)
 
 	// RIPEMD160 produces exactly 20 bytes, use all of them
@@ -65,6 +72,58 @@ func PubToAddress(pubKey []byte) Address {
 func (kp *KeyPair) GetAddress() Address {
 	pubKeyBytes := crypto.CompressPubkey(kp.PublicKey)
 	return PubToAddress(pubKeyBytes)
+}
+
+// GetBech32Address returns the Bech32 encoded address for a key pair
+func (kp *KeyPair) GetBech32Address() (string, error) {
+	address := kp.GetAddress()
+	return AddressToBech32(address, "dyp_")
+}
+
+// AddressToBech32 converts an address to Bech32 format
+func AddressToBech32(address Address, hrp string) (string, error) {
+	// Convert address bytes to 5-bit groups for Bech32
+	converted, err := bech32.ConvertBits(address[:], 8, 5, true)
+	if err != nil {
+		return "", fmt.Errorf("failed to convert address bits: %w", err)
+	}
+
+	// Encode to Bech32
+	encoded, err := bech32.Encode(hrp, converted)
+	if err != nil {
+		return "", fmt.Errorf("failed to encode address: %w", err)
+	}
+
+	return encoded, nil
+}
+
+// Bech32ToAddress converts a Bech32 address back to Address type
+func Bech32ToAddress(bech32Addr string) (Address, error) {
+	// Decode Bech32
+	hrp, data, err := bech32.Decode(bech32Addr)
+	if err != nil {
+		return Address{}, fmt.Errorf("failed to decode bech32 address: %w", err)
+	}
+
+	// Verify HRP
+	if hrp != "dyp_" {
+		return Address{}, fmt.Errorf("invalid HRP: expected 'dyp_', got '%s'", hrp)
+	}
+
+	// Convert 5-bit groups back to 8-bit bytes
+	converted, err := bech32.ConvertBits(data, 5, 8, false)
+	if err != nil {
+		return Address{}, fmt.Errorf("failed to convert address bits: %w", err)
+	}
+
+	// Verify length
+	if len(converted) != 20 {
+		return Address{}, fmt.Errorf("invalid address length: %d", len(converted))
+	}
+
+	var address Address
+	copy(address[:], converted)
+	return address, nil
 }
 
 // SignHash signs a hash with the private key
