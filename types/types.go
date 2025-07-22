@@ -1,6 +1,7 @@
 package types
 
 import (
+	"crypto/ecdsa"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -8,6 +9,8 @@ import (
 	"time"
 
 	"dyphira-node/crypto"
+
+	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 )
 
 // Block represents a Dyphira block
@@ -37,7 +40,21 @@ type Transaction struct {
 	Value     *big.Int       `json:"value"`
 	Fee       *big.Int       `json:"fee"`
 	Signature Signature      `json:"signature"`
+	Type      TxType         `json:"type"` // New field for transaction type
+	Data      []byte         `json:"data"` // New field for transaction data
 }
+
+// TxType represents the type of transaction
+type TxType uint8
+
+const (
+	TxTypeTransfer TxType = iota
+	TxTypeStake
+	TxTypeUnstake
+	TxTypeDelegate
+	TxTypeUndelegate
+	TxTypeClaimRewards
+)
 
 // Signature represents transaction signature
 type Signature struct {
@@ -48,12 +65,25 @@ type Signature struct {
 
 // Validator represents a validator in the DPoS system
 type Validator struct {
-	Address        crypto.Address `json:"address"`
-	SelfStake      *big.Int       `json:"self_stake"`
-	DelegatedStake *big.Int       `json:"delegated_stake"`
-	Reputation     uint64         `json:"reputation"`
-	IsOnline       bool           `json:"is_online"`
-	LastSeen       int64          `json:"last_seen"`
+	Address        crypto.Address              `json:"address"`
+	SelfStake      *big.Int                    `json:"self_stake"`
+	DelegatedStake *big.Int                    `json:"delegated_stake"`
+	Reputation     uint64                      `json:"reputation"`
+	IsOnline       bool                        `json:"is_online"`
+	LastSeen       int64                       `json:"last_seen"`
+	Delegators     map[crypto.Address]*big.Int `json:"delegators"`      // Track individual delegators
+	TotalRewards   *big.Int                    `json:"total_rewards"`   // Total rewards earned
+	BlocksProposed uint64                      `json:"blocks_proposed"` // Number of blocks proposed
+	BlocksApproved uint64                      `json:"blocks_approved"` // Number of blocks approved
+}
+
+// Delegation represents a delegation from a user to a validator
+type Delegation struct {
+	Delegator   crypto.Address `json:"delegator"`
+	Validator   crypto.Address `json:"validator"`
+	Amount      *big.Int       `json:"amount"`
+	Rewards     *big.Int       `json:"rewards"`      // Accumulated rewards
+	LastClaimed int64          `json:"last_claimed"` // Last time rewards were claimed
 }
 
 // Account represents a user account
@@ -82,13 +112,14 @@ const (
 
 // Block constants
 const (
-	CommitteeSize     = 31
-	EpochLength       = 270
+	CommitteeSize     = 5
+	EpochLength       = 45
 	BlockTime         = 2 * time.Second
 	BlockSizeLimit    = 256 * 1024 * 1024 // 256 MB
-	FinalityThreshold = 21                // 2/3 + 1
+	FinalityThreshold = 3                 // 2/3 + 1
 	ApprovalTimeout   = 250 * time.Millisecond
 	MinSelfStake      = 10000 // 10,000 DYP
+	BlocksPerEpoch    = 9
 )
 
 // Hash calculates the hash of a block
@@ -168,6 +199,19 @@ func (tx *Transaction) Bytes() []byte {
 	buf = append(buf, byte(feeLen))
 	buf = append(buf, feeBytes...)
 
+	// Transaction type (1 byte)
+	buf = append(buf, byte(tx.Type))
+
+	// Data length and data (if any)
+	dataLen := len(tx.Data)
+	if dataLen > 65535 {
+		panic("data too large")
+	}
+	dataLenBytes := make([]byte, 2)
+	binary.BigEndian.PutUint16(dataLenBytes, uint16(dataLen))
+	buf = append(buf, dataLenBytes...)
+	buf = append(buf, tx.Data...)
+
 	return buf
 }
 
@@ -201,12 +245,19 @@ func (tx *Transaction) Verify() bool {
 		return false
 	}
 
+	// Verify signature using the recovered public key
+	// Convert signature to ECDSA format
+	r := new(big.Int).SetBytes(tx.Signature.R[:])
+	s := new(big.Int).SetBytes(tx.Signature.S[:])
+
+	// Parse public key (pubKey is already compressed from Ecrecover)
+	ecdsaPubKey, err := ethcrypto.DecompressPubkey(pubKey)
+	if err != nil {
+		return false
+	}
+
 	// Verify signature
-	return crypto.VerifySignature(txHash, &crypto.Signature{
-		V: tx.Signature.V,
-		R: tx.Signature.R,
-		S: tx.Signature.S,
-	}, pubKey)
+	return ecdsa.Verify(ecdsaPubKey, txHash[:], r, s)
 }
 
 // GetTotalStake returns the total stake of a validator
@@ -214,6 +265,66 @@ func (v *Validator) GetTotalStake() *big.Int {
 	total := new(big.Int)
 	total.Add(v.SelfStake, v.DelegatedStake)
 	return total
+}
+
+// NewStakeTransaction creates a new stake transaction
+func NewStakeTransaction(nonce uint64, amount *big.Int, fee *big.Int) *Transaction {
+	return &Transaction{
+		Nonce: nonce,
+		To:    crypto.Address{}, // Zero address for staking
+		Value: amount,
+		Fee:   fee,
+		Type:  TxTypeStake,
+		Data:  []byte{},
+	}
+}
+
+// NewUnstakeTransaction creates a new unstake transaction
+func NewUnstakeTransaction(nonce uint64, amount *big.Int, fee *big.Int) *Transaction {
+	return &Transaction{
+		Nonce: nonce,
+		To:    crypto.Address{}, // Zero address for unstaking
+		Value: amount,
+		Fee:   fee,
+		Type:  TxTypeUnstake,
+		Data:  []byte{},
+	}
+}
+
+// NewDelegateTransaction creates a new delegate transaction
+func NewDelegateTransaction(nonce uint64, validator crypto.Address, amount *big.Int, fee *big.Int) *Transaction {
+	return &Transaction{
+		Nonce: nonce,
+		To:    validator,
+		Value: amount,
+		Fee:   fee,
+		Type:  TxTypeDelegate,
+		Data:  []byte{},
+	}
+}
+
+// NewUndelegateTransaction creates a new undelegate transaction
+func NewUndelegateTransaction(nonce uint64, validator crypto.Address, amount *big.Int, fee *big.Int) *Transaction {
+	return &Transaction{
+		Nonce: nonce,
+		To:    validator,
+		Value: amount,
+		Fee:   fee,
+		Type:  TxTypeUndelegate,
+		Data:  []byte{},
+	}
+}
+
+// NewClaimRewardsTransaction creates a new claim rewards transaction
+func NewClaimRewardsTransaction(nonce uint64, validator crypto.Address, fee *big.Int) *Transaction {
+	return &Transaction{
+		Nonce: nonce,
+		To:    validator,
+		Value: big.NewInt(0),
+		Fee:   fee,
+		Type:  TxTypeClaimRewards,
+		Data:  []byte{},
+	}
 }
 
 // IsEligible checks if a validator is eligible for committee
@@ -257,23 +368,16 @@ func (tx *Transaction) UnmarshalJSON(data []byte) error {
 	}{
 		Alias: (*Alias)(tx),
 	}
-
-	if err := json.Unmarshal(data, &aux); err != nil {
+	if err := json.Unmarshal(data, aux); err != nil {
 		return err
 	}
-
-	// Parse big.Int values
-	value, ok := new(big.Int).SetString(aux.Value, 10)
-	if !ok {
-		return fmt.Errorf("invalid value: %s", aux.Value)
+	tx.Value = new(big.Int)
+	if err := tx.Value.UnmarshalJSON(json.RawMessage(aux.Value)); err != nil {
+		return err
 	}
-	tx.Value = value
-
-	fee, ok := new(big.Int).SetString(aux.Fee, 10)
-	if !ok {
-		return fmt.Errorf("invalid fee: %s", aux.Fee)
+	tx.Fee = new(big.Int)
+	if err := tx.Fee.UnmarshalJSON(json.RawMessage(aux.Fee)); err != nil {
+		return err
 	}
-	tx.Fee = fee
-
 	return nil
 }

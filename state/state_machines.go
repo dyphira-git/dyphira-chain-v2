@@ -30,6 +30,7 @@ type StateDataDB struct {
 	accounts     map[crypto.Address]*Account
 	validators   map[crypto.Address]*Validator
 	transactions map[crypto.Hash]*types.Transaction
+	delegations  map[crypto.Address]map[crypto.Address]*types.Delegation // delegator -> validator -> delegation
 }
 
 // NewStateMachines creates new state machines
@@ -42,6 +43,7 @@ func NewStateMachines() *StateMachines {
 			accounts:     make(map[crypto.Address]*Account),
 			validators:   make(map[crypto.Address]*Validator),
 			transactions: make(map[crypto.Hash]*types.Transaction),
+			delegations:  make(map[crypto.Address]map[crypto.Address]*types.Delegation),
 		},
 	}
 }
@@ -233,4 +235,129 @@ func (sm *StateMachines) GetValidatorStateRoot() crypto.Hash {
 // GetTransactionStateRoot returns the transaction state trie root
 func (sm *StateMachines) GetTransactionStateRoot() crypto.Hash {
 	return sm.TransactionState.Root()
+}
+
+// GetDelegation retrieves a delegation from a delegator to a validator
+func (sm *StateMachines) GetDelegation(delegator, validator crypto.Address) (*types.Delegation, error) {
+	validatorDelegations, exists := sm.DataDB.delegations[delegator]
+	if !exists {
+		return nil, fmt.Errorf("no delegations found for delegator: %s", delegator.String())
+	}
+
+	delegation, exists := validatorDelegations[validator]
+	if !exists {
+		return nil, fmt.Errorf("delegation not found: delegator %s to validator %s", delegator.String(), validator.String())
+	}
+
+	return delegation, nil
+}
+
+// SetDelegation stores a delegation in the state machines
+func (sm *StateMachines) SetDelegation(delegation *types.Delegation) error {
+	// Initialize delegator map if it doesn't exist
+	if sm.DataDB.delegations[delegation.Delegator] == nil {
+		sm.DataDB.delegations[delegation.Delegator] = make(map[crypto.Address]*types.Delegation)
+	}
+
+	// Store delegation
+	sm.DataDB.delegations[delegation.Delegator][delegation.Validator] = delegation
+
+	// Update validator's delegated stake
+	validator, err := sm.GetValidator(delegation.Validator)
+	if err != nil {
+		return fmt.Errorf("failed to get validator: %w", err)
+	}
+
+	// Initialize delegators map if it doesn't exist
+	if validator.Delegators == nil {
+		validator.Delegators = make(map[crypto.Address]*big.Int)
+	}
+
+	// Update or add delegator
+	validator.Delegators[delegation.Delegator] = delegation.Amount
+
+	// Recalculate total delegated stake
+	totalDelegated := big.NewInt(0)
+	for _, amount := range validator.Delegators {
+		totalDelegated.Add(totalDelegated, amount)
+	}
+	validator.DelegatedStake = totalDelegated
+
+	// Update validator in state
+	err = sm.SetValidator(delegation.Validator, validator)
+	if err != nil {
+		return fmt.Errorf("failed to update validator: %w", err)
+	}
+
+	return nil
+}
+
+// RemoveDelegation removes a delegation from the state machines
+func (sm *StateMachines) RemoveDelegation(delegator, validator crypto.Address) error {
+	validatorDelegations, exists := sm.DataDB.delegations[delegator]
+	if !exists {
+		return fmt.Errorf("no delegations found for delegator: %s", delegator.String())
+	}
+
+	if _, exists := validatorDelegations[validator]; !exists {
+		return fmt.Errorf("delegation not found: delegator %s to validator %s", delegator.String(), validator.String())
+	}
+
+	// Remove delegation
+	delete(validatorDelegations, validator)
+	if len(validatorDelegations) == 0 {
+		delete(sm.DataDB.delegations, delegator)
+	}
+
+	// Update validator's delegated stake
+	validatorObj, err := sm.GetValidator(validator)
+	if err != nil {
+		return fmt.Errorf("failed to get validator: %w", err)
+	}
+
+	// Remove delegator from validator
+	delete(validatorObj.Delegators, delegator)
+
+	// Recalculate total delegated stake
+	totalDelegated := big.NewInt(0)
+	for _, amount := range validatorObj.Delegators {
+		totalDelegated.Add(totalDelegated, amount)
+	}
+	validatorObj.DelegatedStake = totalDelegated
+
+	// Update validator in state
+	err = sm.SetValidator(validator, validatorObj)
+	if err != nil {
+		return fmt.Errorf("failed to update validator: %w", err)
+	}
+
+	return nil
+}
+
+// GetAllDelegationsForDelegator returns all delegations for a specific delegator
+func (sm *StateMachines) GetAllDelegationsForDelegator(delegator crypto.Address) ([]*types.Delegation, error) {
+	validatorDelegations, exists := sm.DataDB.delegations[delegator]
+	if !exists {
+		return []*types.Delegation{}, nil
+	}
+
+	var delegations []*types.Delegation
+	for _, delegation := range validatorDelegations {
+		delegations = append(delegations, delegation)
+	}
+
+	return delegations, nil
+}
+
+// GetAllDelegationsForValidator returns all delegations for a specific validator
+func (sm *StateMachines) GetAllDelegationsForValidator(validator crypto.Address) ([]*types.Delegation, error) {
+	var delegations []*types.Delegation
+
+	for _, validatorDelegations := range sm.DataDB.delegations {
+		if delegation, exists := validatorDelegations[validator]; exists {
+			delegations = append(delegations, delegation)
+		}
+	}
+
+	return delegations, nil
 }

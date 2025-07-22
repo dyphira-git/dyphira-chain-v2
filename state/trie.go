@@ -284,16 +284,24 @@ func DecodeAccount(data []byte) (*Account, error) {
 
 // Validator represents a validator in the state
 type Validator struct {
+	Address        crypto.Address
 	SelfStake      *big.Int
 	DelegatedStake *big.Int
 	Reputation     uint64
 	IsOnline       bool
 	LastSeen       int64
+	Delegators     map[crypto.Address]*big.Int
+	TotalRewards   *big.Int
+	BlocksProposed uint64
+	BlocksApproved uint64
 }
 
 // EncodeValidator encodes a validator to bytes
 func EncodeValidator(validator *Validator) []byte {
 	var buf []byte
+
+	// Encode address (20 bytes)
+	buf = append(buf, validator.Address[:]...)
 
 	// Encode self stake
 	selfStakeBytes := validator.SelfStake.Bytes()
@@ -330,16 +338,42 @@ func EncodeValidator(validator *Validator) []byte {
 	binary.BigEndian.PutUint64(lastSeenBytes, uint64(validator.LastSeen))
 	buf = append(buf, lastSeenBytes...)
 
+	// Encode total rewards
+	totalRewardsBytes := validator.TotalRewards.Bytes()
+	totalRewardsLen := len(totalRewardsBytes)
+	if totalRewardsLen > 255 {
+		panic("total rewards too large")
+	}
+	buf = append(buf, byte(totalRewardsLen))
+	buf = append(buf, totalRewardsBytes...)
+
+	// Encode blocks proposed (8 bytes)
+	blocksProposedBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(blocksProposedBytes, validator.BlocksProposed)
+	buf = append(buf, blocksProposedBytes...)
+
+	// Encode blocks approved (8 bytes)
+	blocksApprovedBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(blocksApprovedBytes, validator.BlocksApproved)
+	buf = append(buf, blocksApprovedBytes...)
+
+	// Note: Delegators map is not encoded as it's handled separately in the state machines
+
 	return buf
 }
 
 // DecodeValidator decodes a validator from bytes
 func DecodeValidator(data []byte) (*Validator, error) {
-	if len(data) < 18 {
+	if len(data) < 38 {
 		return nil, fmt.Errorf("invalid validator data length")
 	}
 
 	pos := 0
+
+	// Decode address (20 bytes)
+	var address crypto.Address
+	copy(address[:], data[pos:pos+20])
+	pos += 20
 
 	// Decode self stake
 	selfStakeLen := int(data[pos])
@@ -378,12 +412,43 @@ func DecodeValidator(data []byte) (*Validator, error) {
 		return nil, fmt.Errorf("invalid validator data length")
 	}
 	lastSeen := int64(binary.BigEndian.Uint64(data[pos : pos+8]))
+	pos += 8
+
+	// Decode total rewards
+	if len(data) < pos+1 {
+		return nil, fmt.Errorf("invalid validator data length")
+	}
+	totalRewardsLen := int(data[pos])
+	pos++
+	if len(data) < pos+totalRewardsLen {
+		return nil, fmt.Errorf("invalid validator data length")
+	}
+	totalRewards := new(big.Int).SetBytes(data[pos : pos+totalRewardsLen])
+	pos += totalRewardsLen
+
+	// Decode blocks proposed
+	if len(data) < pos+8 {
+		return nil, fmt.Errorf("invalid validator data length")
+	}
+	blocksProposed := binary.BigEndian.Uint64(data[pos : pos+8])
+	pos += 8
+
+	// Decode blocks approved
+	if len(data) < pos+8 {
+		return nil, fmt.Errorf("invalid validator data length")
+	}
+	blocksApproved := binary.BigEndian.Uint64(data[pos : pos+8])
 
 	return &Validator{
+		Address:        address,
 		SelfStake:      selfStake,
 		DelegatedStake: delegatedStake,
 		Reputation:     reputation,
 		IsOnline:       isOnline,
 		LastSeen:       lastSeen,
+		TotalRewards:   totalRewards,
+		BlocksProposed: blocksProposed,
+		BlocksApproved: blocksApproved,
+		Delegators:     make(map[crypto.Address]*big.Int), // Initialize empty map
 	}, nil
 }

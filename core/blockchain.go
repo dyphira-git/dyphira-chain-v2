@@ -239,18 +239,155 @@ func (bc *Blockchain) ProcessTransaction(tx *types.Transaction) error {
 		return fmt.Errorf("failed to store sender account: %w", err)
 	}
 
-	// Update recipient account (if not zero address)
-	if tx.To != (crypto.Address{}) {
-		recipientAccount, err := bc.stateMachines.GetAccount(tx.To)
-		if err != nil {
-			return fmt.Errorf("failed to get recipient account: %w", err)
+	// Process transaction based on type
+	switch tx.Type {
+	case types.TxTypeTransfer:
+		// Update recipient account (if not zero address)
+		if tx.To != (crypto.Address{}) {
+			recipientAccount, err := bc.stateMachines.GetAccount(tx.To)
+			if err != nil {
+				return fmt.Errorf("failed to get recipient account: %w", err)
+			}
+
+			recipientAccount.Balance.Add(recipientAccount.Balance, tx.Value)
+
+			err = bc.stateMachines.SetAccount(tx.To, recipientAccount)
+			if err != nil {
+				return fmt.Errorf("failed to store recipient account: %w", err)
+			}
 		}
 
-		recipientAccount.Balance.Add(recipientAccount.Balance, tx.Value)
-
-		err = bc.stateMachines.SetAccount(tx.To, recipientAccount)
+	case types.TxTypeStake:
+		// Create or update validator
+		validator, err := bc.stateMachines.GetValidator(sender)
 		if err != nil {
-			return fmt.Errorf("failed to store recipient account: %w", err)
+			// Create new validator
+			validator = &state.Validator{
+				Address:        sender,
+				SelfStake:      tx.Value,
+				DelegatedStake: big.NewInt(0),
+				Reputation:     1,
+				IsOnline:       true,
+				LastSeen:       time.Now().Unix(),
+				Delegators:     make(map[crypto.Address]*big.Int),
+				TotalRewards:   big.NewInt(0),
+				BlocksProposed: 0,
+				BlocksApproved: 0,
+			}
+		} else {
+			// Update existing validator
+			validator.SelfStake.Add(validator.SelfStake, tx.Value)
+			validator.LastSeen = time.Now().Unix()
+		}
+
+		err = bc.stateMachines.SetValidator(sender, validator)
+		if err != nil {
+			return fmt.Errorf("failed to update validator: %w", err)
+		}
+
+	case types.TxTypeUnstake:
+		// Get validator
+		validator, err := bc.stateMachines.GetValidator(sender)
+		if err != nil {
+			return fmt.Errorf("validator not found: %w", err)
+		}
+
+		// Check if enough stake to unstake
+		if validator.SelfStake.Cmp(tx.Value) < 0 {
+			return fmt.Errorf("insufficient self stake to unstake")
+		}
+
+		// Update validator
+		validator.SelfStake.Sub(validator.SelfStake, tx.Value)
+		validator.LastSeen = time.Now().Unix()
+
+		// Update validator in state (even if stake becomes zero)
+		err = bc.stateMachines.SetValidator(sender, validator)
+		if err != nil {
+			return fmt.Errorf("failed to update validator: %w", err)
+		}
+
+	case types.TxTypeDelegate:
+		// Verify validator exists
+		_, err := bc.stateMachines.GetValidator(tx.To)
+		if err != nil {
+			return fmt.Errorf("validator not found: %w", err)
+		}
+
+		// Create or update delegation
+		delegation, err := bc.stateMachines.GetDelegation(sender, tx.To)
+		if err != nil {
+			// Create new delegation
+			delegation = &types.Delegation{
+				Delegator:   sender,
+				Validator:   tx.To,
+				Amount:      tx.Value,
+				Rewards:     big.NewInt(0),
+				LastClaimed: time.Now().Unix(),
+			}
+		} else {
+			// Update existing delegation
+			delegation.Amount.Add(delegation.Amount, tx.Value)
+		}
+
+		err = bc.stateMachines.SetDelegation(delegation)
+		if err != nil {
+			return fmt.Errorf("failed to set delegation: %w", err)
+		}
+
+	case types.TxTypeUndelegate:
+		// Get delegation
+		delegation, err := bc.stateMachines.GetDelegation(sender, tx.To)
+		if err != nil {
+			return fmt.Errorf("delegation not found: %w", err)
+		}
+
+		// Check if enough delegated amount
+		if delegation.Amount.Cmp(tx.Value) < 0 {
+			return fmt.Errorf("insufficient delegated amount to undelegate")
+		}
+
+		// Update delegation
+		delegation.Amount.Sub(delegation.Amount, tx.Value)
+
+		if delegation.Amount.Cmp(big.NewInt(0)) == 0 {
+			// Remove delegation if amount becomes zero
+			err = bc.stateMachines.RemoveDelegation(sender, tx.To)
+			if err != nil {
+				return fmt.Errorf("failed to remove delegation: %w", err)
+			}
+		} else {
+			err = bc.stateMachines.SetDelegation(delegation)
+			if err != nil {
+				return fmt.Errorf("failed to update delegation: %w", err)
+			}
+		}
+
+	case types.TxTypeClaimRewards:
+		// Get delegation
+		delegation, err := bc.stateMachines.GetDelegation(sender, tx.To)
+		if err != nil {
+			return fmt.Errorf("delegation not found: %w", err)
+		}
+
+		// Calculate rewards (simplified - in practice this would be more complex)
+		rewards := delegation.Rewards
+		if rewards.Cmp(big.NewInt(0)) > 0 {
+			// Transfer rewards to delegator
+			senderAccount.Balance.Add(senderAccount.Balance, rewards)
+			err = bc.stateMachines.SetAccount(sender, senderAccount)
+			if err != nil {
+				return fmt.Errorf("failed to update sender account: %w", err)
+			}
+
+			// Reset delegation rewards
+			delegation.Rewards = big.NewInt(0)
+			delegation.LastClaimed = time.Now().Unix()
+
+			err = bc.stateMachines.SetDelegation(delegation)
+			if err != nil {
+				return fmt.Errorf("failed to update delegation: %w", err)
+			}
 		}
 	}
 
@@ -340,7 +477,17 @@ func (bc *Blockchain) GetLatestHeight() uint64 {
 	return bc.latest
 }
 
-// GetStateRoots returns the state roots of all state machines
+// GetStateRoots returns the current state roots
 func (bc *Blockchain) GetStateRoots() (crypto.Hash, crypto.Hash, crypto.Hash) {
 	return bc.stateMachines.GetStateRoots()
+}
+
+// SetAccount sets an account in the state machine (for testing purposes)
+func (bc *Blockchain) SetAccount(address crypto.Address, account *state.Account) error {
+	return bc.stateMachines.SetAccount(address, account)
+}
+
+// CalculateTxRoot calculates the transaction root for a list of transactions
+func (bc *Blockchain) CalculateTxRoot(transactions []types.Transaction) crypto.Hash {
+	return bc.calculateTxRoot(transactions)
 }

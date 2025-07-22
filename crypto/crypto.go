@@ -47,6 +47,25 @@ func GenerateKeyPair() (*KeyPair, error) {
 	}, nil
 }
 
+// KeyPairFromPrivateKey creates a KeyPair from private key bytes
+func KeyPairFromPrivateKey(privateKeyBytes []byte) (*KeyPair, error) {
+	if len(privateKeyBytes) != 32 {
+		return nil, fmt.Errorf("invalid private key length: %d", len(privateKeyBytes))
+	}
+
+	privateKey := new(ecdsa.PrivateKey)
+	privateKey.PublicKey.Curve = crypto.S256()
+	privateKey.D = new(big.Int).SetBytes(privateKeyBytes)
+
+	// Compute public key
+	privateKey.PublicKey.X, privateKey.PublicKey.Y = privateKey.PublicKey.Curve.ScalarBaseMult(privateKeyBytes)
+
+	return &KeyPair{
+		PrivateKey: privateKey,
+		PublicKey:  &privateKey.PublicKey,
+	}, nil
+}
+
 // PubToAddress derives an address from a public key using Whirlpool + RIPEMD160
 func PubToAddress(pubKey []byte) Address {
 	// First hash with Whirlpool
@@ -138,10 +157,19 @@ func (kp *KeyPair) SignHash(hash Hash) (*Signature, error) {
 	s := new(big.Int).SetBytes(signature[32:64])
 	v := signature[64] + 27
 
+	// Convert to 32-byte arrays with proper padding
+	var rBytes, sBytes [32]byte
+	rBytesSlice := r.Bytes()
+	sBytesSlice := s.Bytes()
+
+	// Copy bytes from right to left to maintain proper alignment
+	copy(rBytes[32-len(rBytesSlice):], rBytesSlice)
+	copy(sBytes[32-len(sBytesSlice):], sBytesSlice)
+
 	return &Signature{
 		V: v,
-		R: *(*[32]byte)(r.Bytes()),
-		S: *(*[32]byte)(s.Bytes()),
+		R: rBytes,
+		S: sBytes,
 	}, nil
 }
 

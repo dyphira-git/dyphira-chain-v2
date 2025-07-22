@@ -12,21 +12,25 @@ import (
 
 // DPoS represents the DPoS consensus engine
 type DPoS struct {
-	validators    []*types.Validator
-	committee     []*types.Validator
-	currentEpoch  uint64
-	blockHeight   uint64
-	lastEpochTime int64
+	validators        []*types.Validator
+	committee         []*types.Validator
+	currentEpoch      uint64
+	blockHeight       uint64
+	lastEpochTime     int64
+	proposerIndex     uint64 // Current proposer index within the committee
+	blocksPerProposer uint64 // Number of blocks each proposer creates (9)
 }
 
 // NewDPoS creates a new DPoS consensus engine
 func NewDPoS() *DPoS {
 	return &DPoS{
-		validators:    make([]*types.Validator, 0),
-		committee:     make([]*types.Validator, 0),
-		currentEpoch:  0,
-		blockHeight:   0,
-		lastEpochTime: time.Now().Unix(),
+		validators:        make([]*types.Validator, 0),
+		committee:         make([]*types.Validator, 0),
+		currentEpoch:      0,
+		blockHeight:       0,
+		lastEpochTime:     time.Now().Unix(),
+		proposerIndex:     0,
+		blocksPerProposer: types.BlocksPerEpoch,
 	}
 }
 
@@ -110,8 +114,9 @@ func (d *DPoS) GetProposer() (*types.Validator, error) {
 		return nil, fmt.Errorf("no committee elected")
 	}
 
-	// Calculate proposer index based on block height
-	proposerIndex := (d.blockHeight / 9) % uint64(len(d.committee))
+	// Calculate proposer index based on block height within current epoch
+	epochBlockHeight := d.blockHeight % types.EpochLength
+	proposerIndex := (epochBlockHeight / d.blocksPerProposer) % uint64(len(d.committee))
 	return d.committee[proposerIndex], nil
 }
 
@@ -147,7 +152,41 @@ func (d *DPoS) ProcessBlock(block *types.Block) error {
 		}
 	}
 
+	// Update proposer statistics
+	proposer, err := d.GetProposer()
+	if err == nil && proposer.Address == block.Header.Proposer {
+		proposer.BlocksProposed++
+	}
+
 	return nil
+}
+
+// GetNextProposer returns the next proposer in the rotation
+func (d *DPoS) GetNextProposer() (*types.Validator, error) {
+	if len(d.committee) == 0 {
+		return nil, fmt.Errorf("no committee elected")
+	}
+
+	// Calculate next proposer index
+	epochBlockHeight := d.blockHeight % types.EpochLength
+	nextProposerIndex := ((epochBlockHeight / d.blocksPerProposer) + 1) % uint64(len(d.committee))
+	return d.committee[nextProposerIndex], nil
+}
+
+// GetCurrentProposerIndex returns the current proposer index
+func (d *DPoS) GetCurrentProposerIndex() uint64 {
+	if len(d.committee) == 0 {
+		return 0
+	}
+	epochBlockHeight := d.blockHeight % types.EpochLength
+	return (epochBlockHeight / d.blocksPerProposer) % uint64(len(d.committee))
+}
+
+// GetBlocksUntilNextProposer returns the number of blocks until the next proposer
+func (d *DPoS) GetBlocksUntilNextProposer() uint64 {
+	epochBlockHeight := d.blockHeight % types.EpochLength
+	blocksInCurrentProposer := epochBlockHeight % d.blocksPerProposer
+	return d.blocksPerProposer - blocksInCurrentProposer
 }
 
 // ValidateBlock validates a block from consensus perspective
@@ -238,9 +277,11 @@ func (d *DPoS) CreateBlock(transactions []types.Transaction, proposerKeyPair *cr
 func (d *DPoS) AddApproval(block *types.Block, validatorKeyPair *crypto.KeyPair) error {
 	// Verify validator is in committee
 	validatorAddress := validatorKeyPair.GetAddress()
+	var validator *types.Validator
 	isInCommittee := false
 	for _, v := range d.committee {
 		if v.Address == validatorAddress {
+			validator = v
 			isInCommittee = true
 			break
 		}
@@ -249,6 +290,10 @@ func (d *DPoS) AddApproval(block *types.Block, validatorKeyPair *crypto.KeyPair)
 	if !isInCommittee {
 		return fmt.Errorf("validator not in committee: %s", validatorAddress.String())
 	}
+
+	// Check if validator already approved this block
+	// In a real implementation, you'd verify the signature to get the validator
+	// For now, we'll assume no duplicate approvals
 
 	// Sign block
 	blockHash := block.Hash()
@@ -261,12 +306,30 @@ func (d *DPoS) AddApproval(block *types.Block, validatorKeyPair *crypto.KeyPair)
 	approval := append(signature.R[:], signature.S[:]...)
 	block.Approvals = append(block.Approvals, approval)
 
+	// Update validator statistics
+	validator.BlocksApproved++
+
 	return nil
+}
+
+// GetApprovalCount returns the number of approvals for a block
+func (d *DPoS) GetApprovalCount(block *types.Block) int {
+	return len(block.Approvals)
+}
+
+// GetCommitteeApprovalPercentage returns the percentage of committee members who approved
+func (d *DPoS) GetCommitteeApprovalPercentage(block *types.Block) float64 {
+	if len(d.committee) == 0 {
+		return 0.0
+	}
+	return float64(len(block.Approvals)) / float64(len(d.committee)) * 100.0
 }
 
 // IsBlockFinalized checks if a block is finalized
 func (d *DPoS) IsBlockFinalized(block *types.Block) bool {
-	return len(block.Approvals) >= types.FinalityThreshold
+	approvalCount := len(block.Approvals)
+	requiredApprovals := (len(d.committee) * 2) / 3 // 2/3 majority
+	return approvalCount >= requiredApprovals
 }
 
 // calculateTxRoot calculates the transaction root
