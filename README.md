@@ -234,19 +234,6 @@ type Block struct {
 4. Add tests for new functionality
 5. Submit a pull request
 
-## License
-
-[Add your license here]
-
-## Roadmap
-
-- [ ] Smart contract support
-- [ ] Cross-chain bridges
-- [ ] Advanced staking mechanisms
-- [ ] Governance system
-- [ ] Mobile wallet SDK
-- [ ] Enterprise features
-
 ## Support
 
 For questions and support, please open an issue on GitHub or contact the development team. 

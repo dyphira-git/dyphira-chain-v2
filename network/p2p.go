@@ -196,7 +196,28 @@ func (n *P2PNode) Start() error {
 
 // Stop stops the P2P node
 func (n *P2PNode) Stop() error {
+	// Cancel context to stop all goroutines
 	n.cancel()
+
+	// Close all subscriptions
+	n.mu.Lock()
+	for _, sub := range n.subs {
+		if sub != nil {
+			sub.Cancel()
+		}
+	}
+	n.mu.Unlock()
+
+	// Close all topics
+	n.mu.Lock()
+	for _, topic := range n.topics {
+		if topic != nil {
+			topic.Close()
+		}
+	}
+	n.mu.Unlock()
+
+	// Close the libp2p host
 	return n.host.Close()
 }
 
@@ -785,7 +806,12 @@ func (n *P2PNode) onPeerDisconnected(net network.Network, conn network.Conn) {
 // handleNewNodeJoin handles when a new node joins the network
 func (n *P2PNode) handleNewNodeJoin(peerID peer.ID) {
 	// Wait a bit for the connection to stabilize
-	time.Sleep(2 * time.Second)
+	select {
+	case <-n.ctx.Done():
+		return // Context cancelled, don't proceed
+	case <-time.After(2 * time.Second):
+		// Continue after delay
+	}
 
 	// Send state sync request to get the new node up to date
 	currentHeight := n.blockchain.GetLatestHeight()

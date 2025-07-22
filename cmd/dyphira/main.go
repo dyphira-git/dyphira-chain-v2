@@ -1,14 +1,18 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"math/big"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"dyphira-node/consensus"
@@ -90,12 +94,21 @@ func startNode(args []string) {
 	connectPeer := fs.String("connect", "", "Peer address to connect to")
 	fs.Parse(args)
 
+	// Create context with cancellation for graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	// Create blockchain
 	blockchain, err := core.NewBlockchain(*dbPath)
 	if err != nil {
 		log.Fatalf("Failed to create blockchain: %v", err)
 	}
-	defer blockchain.Close()
+	defer func() {
+		log.Println("Closing blockchain...")
+		if err := blockchain.Close(); err != nil {
+			log.Printf("Error closing blockchain: %v", err)
+		}
+	}()
 
 	// Check if genesis block exists
 	_, err = blockchain.GetBlockByHeight(0)
@@ -115,6 +128,12 @@ func startNode(args []string) {
 	if err != nil {
 		log.Fatalf("Failed to create P2P node: %v", err)
 	}
+	defer func() {
+		log.Println("Stopping P2P node...")
+		if err := p2pNode.Stop(); err != nil {
+			log.Printf("Error stopping P2P node: %v", err)
+		}
+	}()
 
 	// Start P2P node
 	err = p2pNode.Start()
@@ -136,21 +155,66 @@ func startNode(args []string) {
 		}
 	}
 
-	// Start background tasks
-	go startBlockProduction(blockchain, dpos, p2pNode)
-	go startStateSync(blockchain, p2pNode)
+	// Create wait group for background tasks
+	var wg sync.WaitGroup
 
-	// Keep the node running
-	select {}
+	// Start background tasks with context
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		startBlockProduction(ctx, blockchain, dpos, p2pNode)
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		startStateSync(ctx, blockchain, p2pNode)
+	}()
+
+	// Set up signal handling for graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	log.Println("Node is running. Press Ctrl+C to stop gracefully...")
+
+	// Wait for shutdown signal
+	select {
+	case sig := <-sigChan:
+		log.Printf("Received signal %v, initiating graceful shutdown...", sig)
+		cancel() // Cancel context to stop background tasks
+	case <-ctx.Done():
+		log.Println("Context cancelled, shutting down...")
+	}
+
+	// Wait for background tasks to finish (with timeout)
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		log.Println("All background tasks completed")
+	case <-time.After(10 * time.Second):
+		log.Println("Timeout waiting for background tasks, forcing shutdown")
+	}
+
+	log.Println("Node shutdown complete")
 }
 
 // startBlockProduction starts the block production process
-func startBlockProduction(blockchain *core.Blockchain, dpos *consensus.DPoS, p2pNode *network.P2PNode) {
+func startBlockProduction(ctx context.Context, blockchain *core.Blockchain, dpos *consensus.DPoS, p2pNode *network.P2PNode) {
 	ticker := time.NewTicker(2 * time.Second) // Block time
 	defer ticker.Stop()
 
+	log.Println("Block production started")
+
 	for {
 		select {
+		case <-ctx.Done():
+			log.Println("Block production stopped")
+			return
 		case <-ticker.C:
 			// Create a new block
 			block, err := createNewBlock(blockchain, dpos)
@@ -173,9 +237,6 @@ func startBlockProduction(blockchain *core.Blockchain, dpos *consensus.DPoS, p2p
 			} else {
 				log.Printf("Broadcasted block %d", block.Header.Height)
 			}
-
-		case <-time.After(10 * time.Second):
-			// Timeout - continue
 		}
 	}
 }
@@ -212,12 +273,17 @@ func createNewBlock(blockchain *core.Blockchain, dpos *consensus.DPoS) (*types.B
 }
 
 // startStateSync starts the state synchronization process
-func startStateSync(blockchain *core.Blockchain, p2pNode *network.P2PNode) {
+func startStateSync(ctx context.Context, blockchain *core.Blockchain, p2pNode *network.P2PNode) {
 	ticker := time.NewTicker(30 * time.Second) // Sync every 30 seconds
 	defer ticker.Stop()
 
+	log.Println("State sync started")
+
 	for {
 		select {
+		case <-ctx.Done():
+			log.Println("State sync stopped")
+			return
 		case <-ticker.C:
 			// Check if we need to sync
 			currentHeight := blockchain.GetLatestHeight()
@@ -228,9 +294,6 @@ func startStateSync(blockchain *core.Blockchain, p2pNode *network.P2PNode) {
 					log.Printf("Failed to request state sync: %v", err)
 				}
 			}
-
-		case <-time.After(60 * time.Second):
-			// Timeout - continue
 		}
 	}
 }
