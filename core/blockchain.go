@@ -291,8 +291,17 @@ func (bc *Blockchain) calculateTxRoot(transactions []types.Transaction) crypto.H
 	return crypto.CalculateHash(data)
 }
 
+// GetGenesisBlock returns the genesis block
+func (bc *Blockchain) GetGenesisBlock() (*types.Block, error) {
+	return bc.storage.GetGenesis()
+}
+
 // GetLatestBlock returns the latest block
 func (bc *Blockchain) GetLatestBlock() (*types.Block, error) {
+	// If latest is 0, try to get genesis block
+	if bc.latest == 0 {
+		return bc.storage.GetGenesis()
+	}
 	return bc.storage.GetBlockByHeight(bc.latest)
 }
 
