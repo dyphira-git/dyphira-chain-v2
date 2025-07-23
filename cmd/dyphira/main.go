@@ -121,7 +121,48 @@ func startNode(args []string) {
 	}
 
 	// Create consensus engine
-	dpos := consensus.NewDPoS()
+	dpos := consensus.NewDPoS(blockchain)
+
+	// Add sample validators for testing
+	log.Println("Adding sample validators to consensus system...")
+	for i := 0; i < 10; i++ {
+		// Create a sample key pair for each validator
+		keyPair, err := crypto.GenerateKeyPair()
+		if err != nil {
+			log.Printf("Failed to generate key pair for validator %d: %v", i, err)
+			continue
+		}
+
+		validator := &types.Validator{
+			Address:        keyPair.GetAddress(),
+			SelfStake:      big.NewInt(int64(10000 + i*1000)), // Varying stakes
+			DelegatedStake: big.NewInt(int64(5000 + i*500)),   // Varying delegations
+			Reputation:     uint64(50 + i*5),                  // Varying reputation
+			IsOnline:       true,
+			LastSeen:       time.Now().Unix(),
+			Delegators:     make(map[crypto.Address]*big.Int),
+			TotalRewards:   big.NewInt(0),
+			BlocksProposed: 0,
+			BlocksApproved: 0,
+		}
+
+		err = dpos.AddValidator(validator)
+		if err != nil {
+			log.Printf("Failed to add validator %d: %v", i, err)
+		} else {
+			log.Printf("Added validator %d: %s (stake: %s, reputation: %d)",
+				i+1, validator.Address.String(), validator.GetTotalStake().String(), validator.Reputation)
+		}
+	}
+
+	// Elect initial committee
+	log.Println("Electing initial committee...")
+	err = dpos.ElectCommittee()
+	if err != nil {
+		log.Printf("Failed to elect initial committee: %v", err)
+	} else {
+		log.Printf("Initial committee elected with %d members", len(dpos.GetCommittee()))
+	}
 
 	// Create P2P node
 	p2pNode, err := network.NewP2PNode(*port, blockchain, dpos)
@@ -205,8 +246,10 @@ func startNode(args []string) {
 
 // startBlockProduction starts the block production process
 func startBlockProduction(ctx context.Context, blockchain *core.Blockchain, dpos *consensus.DPoS, p2pNode *network.P2PNode) {
-	ticker := time.NewTicker(2 * time.Second) // Block time
+	ticker := time.NewTicker(2 * time.Second)          // Block time
+	stateLogTicker := time.NewTicker(30 * time.Second) // Log consensus state every 30 seconds
 	defer ticker.Stop()
+	defer stateLogTicker.Stop()
 
 	log.Println("Block production started")
 
@@ -215,13 +258,27 @@ func startBlockProduction(ctx context.Context, blockchain *core.Blockchain, dpos
 		case <-ctx.Done():
 			log.Println("Block production stopped")
 			return
+		case <-stateLogTicker.C:
+			// Log consensus state periodically
+			dpos.LogConsensusState()
 		case <-ticker.C:
+			// Get current proposer
+			proposer, err := dpos.GetProposer()
+			if err != nil {
+				log.Printf("Failed to get proposer: %v", err)
+				continue
+			}
+
+			log.Printf("Current proposer for next block: %s", proposer.Address.String())
+
 			// Create a new block
 			block, err := createNewBlock(blockchain, dpos)
 			if err != nil {
 				log.Printf("Failed to create block: %v", err)
 				continue
 			}
+
+			log.Printf("Block %d created successfully by proposer %s", block.Header.Height, proposer.Address.String())
 
 			// Add block to blockchain
 			err = blockchain.AddBlock(block)
@@ -230,44 +287,62 @@ func startBlockProduction(ctx context.Context, blockchain *core.Blockchain, dpos
 				continue
 			}
 
+			log.Printf("Block %d added to blockchain successfully", block.Header.Height)
+
+			// Update consensus state
+			err = dpos.ProcessBlock(block)
+			if err != nil {
+				log.Printf("Failed to process block in consensus: %v", err)
+			} else {
+				log.Printf("Block %d processed in consensus successfully", block.Header.Height)
+			}
+
+			// Check for epoch transition AFTER processing the block
+			if dpos.ShouldStartNewEpoch() {
+				log.Printf("Epoch transition detected after processing block %d", block.Header.Height)
+				err := dpos.StartNewEpoch()
+				if err != nil {
+					log.Printf("Failed to start new epoch: %v", err)
+				}
+			}
+
 			// Broadcast block to network
 			err = p2pNode.PublishBlock(block)
 			if err != nil {
 				log.Printf("Failed to broadcast block: %v", err)
 			} else {
-				log.Printf("Broadcasted block %d", block.Header.Height)
+				log.Printf("Broadcasted block %d to network", block.Header.Height)
 			}
 		}
 	}
 }
 
-// createNewBlock creates a new block
+// createNewBlock creates a new block using the DPoS consensus engine
 func createNewBlock(blockchain *core.Blockchain, dpos *consensus.DPoS) (*types.Block, error) {
-	// Get latest block
-	latestBlock, err := blockchain.GetLatestBlock()
+	log.Printf("Creating new block at height %d", blockchain.GetLatestHeight()+1)
+
+	// Get current proposer
+	proposer, err := dpos.GetProposer()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get latest block: %w", err)
+		return nil, fmt.Errorf("failed to get proposer: %w", err)
 	}
 
-	// Create block header
-	header := types.BlockHeader{
-		PrevHash:           latestBlock.Hash(),
-		Height:             latestBlock.Header.Height + 1,
-		Timestamp:          time.Now().Unix(),
-		Proposer:           crypto.Address{}, // Will be set by consensus
-		TxRoot:             crypto.Hash{},    // Will be calculated
-		AccountStateRoot:   crypto.Hash{},    // Will be set by blockchain
-		ValidatorStateRoot: crypto.Hash{},    // Will be set by blockchain
-		TxStateRoot:        crypto.Hash{},    // Will be set by blockchain
+	log.Printf("Block proposer selected: %s", proposer.Address.String())
+
+	// Create a temporary key pair for the proposer (in real implementation, this would be the actual proposer's key)
+	// For now, we'll create a dummy key pair for demonstration
+	proposerKeyPair, err := crypto.GenerateKeyPair()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate proposer key pair: %w", err)
 	}
 
-	// Create block with empty transactions for now
-	block := &types.Block{
-		Header:       header,
-		Transactions: []types.Transaction{},
-		ValidatorSig: []byte{},
-		Approvals:    [][]byte{},
+	// Use the DPoS CreateBlock method which handles transaction verification and block creation
+	block, err := dpos.CreateBlock(proposerKeyPair)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create block: %w", err)
 	}
+
+	log.Printf("Block %d created successfully with %d transactions", block.Header.Height, len(block.Transactions))
 
 	return block, nil
 }
@@ -537,7 +612,7 @@ func connectToPeer(args []string) {
 	defer blockchain.Close()
 
 	// Create consensus engine
-	dpos := consensus.NewDPoS()
+	dpos := consensus.NewDPoS(blockchain)
 
 	// Create P2P node
 	p2pNode, err := network.NewP2PNode(0, blockchain, dpos) // Random port
@@ -578,7 +653,7 @@ func listPeers(args []string) {
 	defer blockchain.Close()
 
 	// Create consensus engine
-	dpos := consensus.NewDPoS()
+	dpos := consensus.NewDPoS(blockchain)
 
 	// Create P2P node
 	p2pNode, err := network.NewP2PNode(0, blockchain, dpos) // Random port
@@ -628,7 +703,7 @@ func syncState(args []string) {
 	defer blockchain.Close()
 
 	// Create consensus engine
-	dpos := consensus.NewDPoS()
+	dpos := consensus.NewDPoS(blockchain)
 
 	// Create P2P node
 	p2pNode, err := network.NewP2PNode(0, blockchain, dpos) // Random port

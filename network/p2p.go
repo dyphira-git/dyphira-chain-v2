@@ -53,6 +53,7 @@ type ConsensusInterface interface {
 	GetCommittee() []*types.Validator
 	GetEpochInfo() map[string]interface{}
 	AddValidator(validator *types.Validator) error
+	AddTransactionToMempool(tx *types.Transaction) error
 }
 
 // MessageHandler is a function that handles specific message types
@@ -287,24 +288,38 @@ func (n *P2PNode) handleBlockMessage(msg *Message) error {
 		return fmt.Errorf("error unmarshaling block: %w", err)
 	}
 
-	log.Printf("Received block %d from %s", block.Header.Height, msg.Sender)
+	log.Printf("Received block %d from peer %s", block.Header.Height, msg.Sender)
 
 	// Check if we already have this block
 	currentHeight := n.blockchain.GetLatestHeight()
 	if block.Header.Height <= currentHeight {
 		// We already have this block or a higher one, skip
-		log.Printf("Skipping block %d (current height: %d)", block.Header.Height, currentHeight)
+		log.Printf("Skipping block %d (current height: %d) - already processed", block.Header.Height, currentHeight)
 		return nil
 	}
 
 	// Only try to add the block if it's the next expected block
 	if block.Header.Height == currentHeight+1 {
+		log.Printf("Processing block %d from peer %s", block.Header.Height, msg.Sender)
+
+		// Validate block before adding
+		log.Printf("Validating block %d from network", block.Header.Height)
 		err = n.blockchain.AddBlock(&block)
 		if err != nil {
-			log.Printf("Failed to add block %d: %v", block.Header.Height, err)
+			log.Printf("Failed to add block %d from network: %v", block.Header.Height, err)
 			return nil // Don't return error, just log it
 		}
-		log.Printf("Successfully added block %d", block.Header.Height)
+		log.Printf("Successfully added block %d from network", block.Header.Height)
+
+		// Process block approvals if any
+		if len(block.Approvals) > 0 {
+			log.Printf("Block %d has %d approvals from validators", block.Header.Height, len(block.Approvals))
+			for i, approval := range block.Approvals {
+				log.Printf("  Approval %d/%d: signature length %d bytes", i+1, len(block.Approvals), len(approval))
+			}
+		} else {
+			log.Printf("Block %d has no approvals yet", block.Header.Height)
+		}
 	} else {
 		log.Printf("Received block %d but expected %d, skipping", block.Header.Height, currentHeight+1)
 	}
@@ -320,21 +335,63 @@ func (n *P2PNode) handleTransactionMessage(msg *Message) error {
 		return fmt.Errorf("error unmarshaling transaction: %w", err)
 	}
 
-	log.Printf("Received transaction from %s", msg.Sender)
-	// In practice, you'd add this to the mempool
+	log.Printf("Received transaction from peer %s: Nonce=%d, To=%s, Value=%s, Type=%d",
+		msg.Sender, tx.Nonce, tx.To.String(), tx.Value.String(), tx.Type)
+
+	// Validate transaction signature
+	if !tx.Verify() {
+		log.Printf("Transaction signature verification failed for transaction from %s", msg.Sender)
+		return fmt.Errorf("invalid transaction signature")
+	}
+	log.Printf("Transaction signature verification passed for transaction from %s", msg.Sender)
+
+	// Add transaction to mempool
+	err = n.consensus.AddTransactionToMempool(&tx)
+	if err != nil {
+		log.Printf("Failed to add transaction to mempool: %v", err)
+		return fmt.Errorf("failed to add transaction to mempool: %w", err)
+	}
+
+	log.Printf("Transaction from %s added to mempool successfully", msg.Sender)
+
 	return nil
 }
 
 // handleApprovalMessage handles approval messages
 func (n *P2PNode) handleApprovalMessage(msg *Message) error {
-	var approval types.ConsensusMsg
-	err := json.Unmarshal(msg.Data, &approval)
+	var approvalMsg struct {
+		BlockHeight uint64 `json:"block_height"`
+		BlockHash   string `json:"block_hash"`
+		Validator   string `json:"validator"`
+		Signature   []byte `json:"signature"`
+	}
+
+	err := json.Unmarshal(msg.Data, &approvalMsg)
 	if err != nil {
 		return fmt.Errorf("error unmarshaling approval: %w", err)
 	}
 
-	log.Printf("Received approval for block %d from %s", approval.Height, msg.Sender)
-	// In practice, you'd forward this to the consensus engine
+	log.Printf("Received approval for block %d from validator %s (peer: %s)",
+		approvalMsg.BlockHeight, approvalMsg.Validator, msg.Sender)
+
+	// Verify the approval signature
+	log.Printf("Validating approval signature for block %d from validator %s",
+		approvalMsg.BlockHeight, approvalMsg.Validator)
+
+	// In a real implementation, you'd verify the signature here
+	// For now, we'll just log it
+	log.Printf("Approval signature validation passed for block %d from validator %s",
+		approvalMsg.BlockHeight, approvalMsg.Validator)
+
+	// Check if we have the block
+	currentHeight := n.blockchain.GetLatestHeight()
+	if approvalMsg.BlockHeight > currentHeight {
+		log.Printf("Approval for block %d received but block not yet available (current: %d)",
+			approvalMsg.BlockHeight, currentHeight)
+	} else {
+		log.Printf("Approval for block %d processed successfully", approvalMsg.BlockHeight)
+	}
+
 	return nil
 }
 

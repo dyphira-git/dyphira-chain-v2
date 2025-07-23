@@ -40,8 +40,10 @@ type Transaction struct {
 	Value     *big.Int       `json:"value"`
 	Fee       *big.Int       `json:"fee"`
 	Signature Signature      `json:"signature"`
-	Type      TxType         `json:"type"` // New field for transaction type
-	Data      []byte         `json:"data"` // New field for transaction data
+	Type      TxType         `json:"type"`      // New field for transaction type
+	Data      []byte         `json:"data"`      // New field for transaction data
+	Timestamp int64          `json:"timestamp"` // Transaction timestamp for mempool ordering
+	index     int            // Used by heap.Interface (not serialized)
 }
 
 // TxType represents the type of transaction
