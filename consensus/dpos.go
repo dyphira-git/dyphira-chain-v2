@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"log"
 	"math/big"
-	"sort"
+	"math/rand"
 	"time"
 
 	"dyphira-node/core"
@@ -79,7 +79,66 @@ func (d *DPoS) UpdateValidator(address crypto.Address, updates *types.Validator)
 	return fmt.Errorf("validator not found: %s", address.String())
 }
 
-// ElectCommittee elects the committee for the current epoch
+// WeightedRandomSelect performs weighted random selection from a list of validators
+// based on their total stake and reputation
+func (d *DPoS) WeightedRandomSelect(validators []*types.Validator, count int) []*types.Validator {
+	if len(validators) <= count {
+		return validators
+	}
+
+	// Calculate total weight (sum of all validator weights)
+	totalWeight := uint64(0)
+	weights := make([]uint64, len(validators))
+
+	for i, v := range validators {
+		// Weight = total stake * reputation (convert to uint64 for simpler math)
+		totalStake := v.GetTotalStake()
+		// Use a reasonable conversion to avoid overflow
+		stakeUint64 := uint64(0)
+		if totalStake.Cmp(big.NewInt(0)) > 0 {
+			// Convert big.Int to uint64, cap at max uint64 if too large
+			if totalStake.BitLen() <= 64 {
+				stakeUint64 = totalStake.Uint64()
+			} else {
+				stakeUint64 = ^uint64(0) // max uint64
+			}
+		}
+		weight := stakeUint64 * v.Reputation
+		weights[i] = weight
+		totalWeight += weight
+	}
+
+	// Use block height as seed for deterministic randomness per epoch
+	seed := int64(d.currentEpoch*1000000 + d.blockHeight)
+	r := rand.New(rand.NewSource(seed))
+
+	selected := make([]*types.Validator, 0, count)
+	selectedIndices := make(map[int]bool)
+
+	for len(selected) < count {
+		// Generate random number between 0 and total weight
+		randomWeight := r.Uint64() % totalWeight
+
+		// Find validator corresponding to this random weight
+		currentWeight := uint64(0)
+		for i, weight := range weights {
+			if selectedIndices[i] {
+				continue // Skip already selected validators
+			}
+
+			currentWeight += weight
+			if randomWeight < currentWeight {
+				selected = append(selected, validators[i])
+				selectedIndices[i] = true
+				break
+			}
+		}
+	}
+
+	return selected
+}
+
+// ElectCommittee elects the committee for the current epoch using weighted random selection
 func (d *DPoS) ElectCommittee() error {
 	log.Printf("Starting committee election for epoch %d", d.currentEpoch)
 
@@ -97,24 +156,15 @@ func (d *DPoS) ElectCommittee() error {
 		return fmt.Errorf("insufficient eligible validators: %d < %d", len(eligible), types.CommitteeSize)
 	}
 
-	// Sort by total stake * reputation
-	sort.Slice(eligible, func(i, j int) bool {
-		totalStakeI := eligible[i].GetTotalStake()
-		totalStakeJ := eligible[j].GetTotalStake()
+	// Use weighted random selection instead of deterministic top-N
+	d.committee = d.WeightedRandomSelect(eligible, types.CommitteeSize)
 
-		scoreI := new(big.Int).Mul(totalStakeI, big.NewInt(int64(eligible[i].Reputation)))
-		scoreJ := new(big.Int).Mul(totalStakeJ, big.NewInt(int64(eligible[j].Reputation)))
-
-		return scoreI.Cmp(scoreJ) > 0
-	})
-
-	// Select top validators
-	d.committee = eligible[:types.CommitteeSize]
-
-	log.Printf("Committee elected successfully for epoch %d:", d.currentEpoch)
+	log.Printf("Committee elected successfully for epoch %d using weighted random selection:", d.currentEpoch)
 	for i, validator := range d.committee {
-		log.Printf("  [%d] Validator: %s, Total Stake: %s, Reputation: %d",
-			i+1, validator.Address.String(), validator.GetTotalStake().String(), validator.Reputation)
+		totalStake := validator.GetTotalStake()
+		weight := new(big.Int).Mul(totalStake, big.NewInt(int64(validator.Reputation)))
+		log.Printf("  [%d] Validator: %s, Total Stake: %s, Reputation: %d, Weight: %s",
+			i+1, validator.Address.String(), totalStake.String(), validator.Reputation, weight.String())
 	}
 
 	return nil
@@ -692,4 +742,14 @@ func (d *DPoS) LogConsensusState() {
 	}
 
 	log.Printf("======================")
+}
+
+// GetCurrentEpoch returns the current epoch
+func (d *DPoS) GetCurrentEpoch() uint64 {
+	return d.currentEpoch
+}
+
+// GetBlockHeight returns the current block height
+func (d *DPoS) GetBlockHeight() uint64 {
+	return d.blockHeight
 }
