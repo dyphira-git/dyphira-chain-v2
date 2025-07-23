@@ -273,15 +273,13 @@ func (d *DPoS) CreateBlock(proposerKeyPair *crypto.KeyPair) (*types.Block, error
 
 	// Get previous block hash from blockchain
 	var prevHash crypto.Hash
-	if d.blockHeight >= 0 {
-		latestBlock, err := d.blockchain.GetLatestBlock()
-		if err != nil {
-			log.Printf("Failed to get latest block for prev hash: %v", err)
-			return nil, fmt.Errorf("failed to get latest block: %w", err)
-		}
-		prevHash = latestBlock.Hash()
-		log.Printf("Using previous block hash: %s", prevHash.String())
+	latestBlock, err := d.blockchain.GetLatestBlock()
+	if err != nil {
+		log.Printf("Failed to get latest block for prev hash: %v", err)
+		return nil, fmt.Errorf("failed to get latest block: %w", err)
 	}
+	prevHash = latestBlock.Hash()
+	log.Printf("Using previous block hash: %s", prevHash.String())
 
 	// Get transactions from mempool
 	pendingTxs := d.mempool.GetPendingTransactions(1000, types.BlockSizeLimit) // Max 1000 txs, respect block size limit

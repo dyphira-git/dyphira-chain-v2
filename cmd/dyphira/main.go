@@ -380,7 +380,6 @@ func createAccount(args []string) {
 		log.Fatalf("Failed to generate key pair: %v", err)
 	}
 
-	address := keyPair.GetAddress()
 	bech32Address, err := keyPair.GetBech32Address()
 	if err != nil {
 		log.Fatalf("Failed to generate Bech32 address: %v", err)
@@ -388,10 +387,9 @@ func createAccount(args []string) {
 
 	// Create account info
 	accountInfo := map[string]interface{}{
-		"address":        address.String(),
-		"bech32_address": bech32Address,
-		"public_key":     fmt.Sprintf("%x", keyPair.PublicKey.X.Bytes()),
-		"private_key":    fmt.Sprintf("%x", keyPair.PrivateKey.D.Bytes()),
+		"address":     bech32Address,
+		"public_key":  fmt.Sprintf("%x", keyPair.PublicKey.X.Bytes()),
+		"private_key": fmt.Sprintf("%x", keyPair.PrivateKey.D.Bytes()),
 	}
 
 	// Output as JSON
@@ -487,10 +485,9 @@ func getBalance(args []string) {
 	}
 
 	balanceInfo := map[string]interface{}{
-		"address":        addr.String(),
-		"bech32_address": bech32Addr,
-		"balance":        account.Balance.String(),
-		"nonce":          account.Nonce,
+		"address": bech32Addr,
+		"balance": account.Balance.String(),
+		"nonce":   account.Nonce,
 	}
 
 	output, err := json.MarshalIndent(balanceInfo, "", "  ")
