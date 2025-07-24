@@ -238,14 +238,14 @@ type Account struct {
 }
 
 // EncodeAccount encodes an account to bytes
-func EncodeAccount(account *Account) []byte {
+func EncodeAccount(account *Account) ([]byte, error) {
 	var buf []byte
 
 	// Encode balance
 	balanceBytes := account.Balance.Bytes()
 	balanceLen := len(balanceBytes)
 	if balanceLen > 255 {
-		panic("balance too large")
+		return nil, fmt.Errorf("balance too large: %d bytes (max 255)", balanceLen)
 	}
 	buf = append(buf, byte(balanceLen))
 	buf = append(buf, balanceBytes...)
@@ -255,7 +255,7 @@ func EncodeAccount(account *Account) []byte {
 	binary.BigEndian.PutUint64(nonceBytes, account.Nonce)
 	buf = append(buf, nonceBytes...)
 
-	return buf
+	return buf, nil
 }
 
 // DecodeAccount decodes an account from bytes
@@ -297,7 +297,7 @@ type Validator struct {
 }
 
 // EncodeValidator encodes a validator to bytes
-func EncodeValidator(validator *Validator) []byte {
+func EncodeValidator(validator *Validator) ([]byte, error) {
 	var buf []byte
 
 	// Encode address (20 bytes)
@@ -307,7 +307,7 @@ func EncodeValidator(validator *Validator) []byte {
 	selfStakeBytes := validator.SelfStake.Bytes()
 	selfStakeLen := len(selfStakeBytes)
 	if selfStakeLen > 255 {
-		panic("self stake too large")
+		return nil, fmt.Errorf("self stake too large: %d bytes (max 255)", selfStakeLen)
 	}
 	buf = append(buf, byte(selfStakeLen))
 	buf = append(buf, selfStakeBytes...)
@@ -316,7 +316,7 @@ func EncodeValidator(validator *Validator) []byte {
 	delegatedStakeBytes := validator.DelegatedStake.Bytes()
 	delegatedStakeLen := len(delegatedStakeBytes)
 	if delegatedStakeLen > 255 {
-		panic("delegated stake too large")
+		return nil, fmt.Errorf("delegated stake too large: %d bytes (max 255)", delegatedStakeLen)
 	}
 	buf = append(buf, byte(delegatedStakeLen))
 	buf = append(buf, delegatedStakeBytes...)
@@ -342,7 +342,7 @@ func EncodeValidator(validator *Validator) []byte {
 	totalRewardsBytes := validator.TotalRewards.Bytes()
 	totalRewardsLen := len(totalRewardsBytes)
 	if totalRewardsLen > 255 {
-		panic("total rewards too large")
+		return nil, fmt.Errorf("total rewards too large: %d bytes (max 255)", totalRewardsLen)
 	}
 	buf = append(buf, byte(totalRewardsLen))
 	buf = append(buf, totalRewardsBytes...)
@@ -359,7 +359,7 @@ func EncodeValidator(validator *Validator) []byte {
 
 	// Note: Delegators map is not encoded as it's handled separately in the state machines
 
-	return buf
+	return buf, nil
 }
 
 // DecodeValidator decodes a validator from bytes

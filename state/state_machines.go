@@ -139,8 +139,12 @@ func (sm *StateMachines) SetValidator(address crypto.Address, validator *Validat
 
 	// Store validator hash in trie (just a marker that validator exists)
 	validatorKey := ValidatorKey(address)
-	validatorHash := crypto.CalculateHash(EncodeValidator(validator))
-	err := sm.ValidatorState.Put(validatorKey, validatorHash[:])
+	validatorBytes, err := EncodeValidator(validator)
+	if err != nil {
+		return fmt.Errorf("failed to encode validator: %w", err)
+	}
+	validatorHash := crypto.CalculateHash(validatorBytes)
+	err = sm.ValidatorState.Put(validatorKey, validatorHash[:])
 	if err != nil {
 		return fmt.Errorf("failed to store validator in trie: %w", err)
 	}

@@ -167,12 +167,16 @@ func (bh *BlockHeader) Bytes() []byte {
 
 // Hash calculates the hash of a transaction
 func (tx *Transaction) Hash() crypto.Hash {
-	txBytes := tx.Bytes()
+	txBytes, err := tx.Bytes()
+	if err != nil {
+		// Return zero hash on error - this should be handled by callers
+		return crypto.Hash{}
+	}
 	return crypto.CalculateHash(txBytes)
 }
 
 // Bytes serializes the transaction to bytes (without signature)
-func (tx *Transaction) Bytes() []byte {
+func (tx *Transaction) Bytes() ([]byte, error) {
 	buf := make([]byte, 0, 100)
 
 	// Nonce (8 bytes)
@@ -187,7 +191,7 @@ func (tx *Transaction) Bytes() []byte {
 	valueBytes := tx.Value.Bytes()
 	valueLen := len(valueBytes)
 	if valueLen > 255 {
-		panic("value too large")
+		return nil, fmt.Errorf("value too large: %d bytes (max 255)", valueLen)
 	}
 	buf = append(buf, byte(valueLen))
 	buf = append(buf, valueBytes...)
@@ -196,7 +200,7 @@ func (tx *Transaction) Bytes() []byte {
 	feeBytes := tx.Fee.Bytes()
 	feeLen := len(feeBytes)
 	if feeLen > 255 {
-		panic("fee too large")
+		return nil, fmt.Errorf("fee too large: %d bytes (max 255)", feeLen)
 	}
 	buf = append(buf, byte(feeLen))
 	buf = append(buf, feeBytes...)
@@ -207,14 +211,14 @@ func (tx *Transaction) Bytes() []byte {
 	// Data length and data (if any)
 	dataLen := len(tx.Data)
 	if dataLen > 65535 {
-		panic("data too large")
+		return nil, fmt.Errorf("data too large: %d bytes (max 65535)", dataLen)
 	}
 	dataLenBytes := make([]byte, 2)
 	binary.BigEndian.PutUint16(dataLenBytes, uint16(dataLen))
 	buf = append(buf, dataLenBytes...)
 	buf = append(buf, tx.Data...)
 
-	return buf
+	return buf, nil
 }
 
 // Sign signs a transaction with a key pair
@@ -364,8 +368,8 @@ func (tx *Transaction) MarshalJSON() ([]byte, error) {
 func (tx *Transaction) UnmarshalJSON(data []byte) error {
 	type Alias Transaction
 	aux := &struct {
-		Value string `json:"value"`
-		Fee   string `json:"fee"`
+		Value interface{} `json:"value"`
+		Fee   interface{} `json:"fee"`
 		*Alias
 	}{
 		Alias: (*Alias)(tx),
@@ -373,13 +377,36 @@ func (tx *Transaction) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, aux); err != nil {
 		return err
 	}
+
+	// Handle Value field (backward compatibility)
 	tx.Value = new(big.Int)
-	if err := tx.Value.UnmarshalJSON(json.RawMessage(aux.Value)); err != nil {
-		return err
+	switch v := aux.Value.(type) {
+	case string:
+		if _, ok := tx.Value.SetString(v, 10); !ok {
+			return fmt.Errorf("failed to parse value: %s", v)
+		}
+	case float64:
+		tx.Value.SetInt64(int64(v))
+	case int64:
+		tx.Value.SetInt64(v)
+	default:
+		return fmt.Errorf("unexpected value type: %T", aux.Value)
 	}
+
+	// Handle Fee field (backward compatibility)
 	tx.Fee = new(big.Int)
-	if err := tx.Fee.UnmarshalJSON(json.RawMessage(aux.Fee)); err != nil {
-		return err
+	switch v := aux.Fee.(type) {
+	case string:
+		if _, ok := tx.Fee.SetString(v, 10); !ok {
+			return fmt.Errorf("failed to parse fee: %s", v)
+		}
+	case float64:
+		tx.Fee.SetInt64(int64(v))
+	case int64:
+		tx.Fee.SetInt64(v)
+	default:
+		return fmt.Errorf("unexpected fee type: %T", aux.Fee)
 	}
+
 	return nil
 }

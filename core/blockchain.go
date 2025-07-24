@@ -131,6 +131,10 @@ func (bc *Blockchain) AddBlock(block *types.Block) error {
 
 // ValidateBlock validates a block
 func (bc *Blockchain) ValidateBlock(block *types.Block) error {
+	if block == nil {
+		return fmt.Errorf("block cannot be nil")
+	}
+
 	log.Printf("Validating block %d", block.Header.Height)
 
 	// Check block height
@@ -178,6 +182,10 @@ func (bc *Blockchain) ValidateBlock(block *types.Block) error {
 
 // ValidateTransaction validates a transaction
 func (bc *Blockchain) ValidateTransaction(tx *types.Transaction) error {
+	if tx == nil {
+		return fmt.Errorf("transaction cannot be nil")
+	}
+
 	log.Printf("Validating transaction: Nonce=%d, To=%s, Value=%s, Type=%d",
 		tx.Nonce, tx.To.String(), tx.Value.String(), tx.Type)
 

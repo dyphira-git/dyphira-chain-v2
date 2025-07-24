@@ -133,7 +133,12 @@ func (mp *Mempool) GetPendingTransactions(maxCount int, maxBlockSize int) []*Tra
 		tx := heap.Pop(tempHeap).(*Transaction)
 
 		// Estimate transaction size (rough approximation)
-		txSize := len(tx.Bytes()) + 65 // +65 for signature
+		txBytes, err := tx.Bytes()
+		if err != nil {
+			log.Printf("Failed to get transaction bytes for size estimation: %v", err)
+			continue
+		}
+		txSize := len(txBytes) + 65 // +65 for signature
 
 		if currentSize+txSize > maxBlockSize {
 			// Put transaction back and stop

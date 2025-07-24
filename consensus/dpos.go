@@ -258,6 +258,10 @@ func (d *DPoS) GetBlocksUntilNextProposer() uint64 {
 
 // ValidateBlock validates a block from consensus perspective
 func (d *DPoS) ValidateBlock(block *types.Block) error {
+	if block == nil {
+		return fmt.Errorf("block cannot be nil")
+	}
+
 	log.Printf("Validating block %d from consensus perspective", block.Header.Height)
 
 	// Check if proposer is in committee
@@ -401,6 +405,10 @@ func (d *DPoS) CreateBlock(proposerKeyPair *crypto.KeyPair) (*types.Block, error
 
 // ValidateTransaction validates a transaction for inclusion in a block
 func (d *DPoS) ValidateTransaction(tx *types.Transaction) error {
+	if tx == nil {
+		return fmt.Errorf("transaction cannot be nil")
+	}
+
 	log.Printf("Validating transaction: Nonce=%d, To=%s, Value=%s, Type=%d",
 		tx.Nonce, tx.To.String(), tx.Value.String(), tx.Type)
 
