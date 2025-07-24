@@ -14,7 +14,7 @@ import (
 
 func TestNewBlockchain(t *testing.T) {
 	// Test creating a new blockchain
-	bc, err := NewBlockchain("./test-blockchain-db")
+	bc, err := NewBlockchain("./test-blockchain.db")
 	assert.NoError(t, err)
 	assert.NotNil(t, bc)
 	assert.NotNil(t, bc.storage)
@@ -27,7 +27,7 @@ func TestNewBlockchain(t *testing.T) {
 }
 
 func TestCreateGenesisBlock(t *testing.T) {
-	bc, err := NewBlockchain("./test-blockchain-db")
+	bc, err := NewBlockchain("./test-blockchain.db")
 	assert.NoError(t, err)
 	defer bc.Close()
 
@@ -47,7 +47,7 @@ func TestCreateGenesisBlock(t *testing.T) {
 }
 
 func TestAddBlock(t *testing.T) {
-	bc, err := NewBlockchain("./test-blockchain-db")
+	bc, err := NewBlockchain("./test-blockchain.db")
 	assert.NoError(t, err)
 	defer bc.Close()
 
@@ -87,7 +87,7 @@ func TestAddBlock(t *testing.T) {
 }
 
 func TestValidateBlock(t *testing.T) {
-	bc, err := NewBlockchain("./test-blockchain-db")
+	bc, err := NewBlockchain("./test-blockchain.db")
 	assert.NoError(t, err)
 	defer bc.Close()
 
@@ -145,7 +145,7 @@ func TestValidateBlock(t *testing.T) {
 }
 
 func TestValidateTransaction(t *testing.T) {
-	bc, err := NewBlockchain("./test-blockchain-db")
+	bc, err := NewBlockchain("./test-blockchain.db")
 	assert.NoError(t, err)
 	defer bc.Close()
 
@@ -228,7 +228,7 @@ func contains(s, substr string) bool {
 }
 
 func TestProcessTransactions(t *testing.T) {
-	bc, err := NewBlockchain("./test-blockchain-db")
+	bc, err := NewBlockchain("./test-blockchain.db")
 	assert.NoError(t, err)
 	defer bc.Close()
 
@@ -273,7 +273,7 @@ func TestProcessTransactions(t *testing.T) {
 }
 
 func TestProcessTransaction(t *testing.T) {
-	bc, err := NewBlockchain("./test-blockchain-db")
+	bc, err := NewBlockchain("./test-blockchain.db")
 	assert.NoError(t, err)
 	defer bc.Close()
 
@@ -305,7 +305,7 @@ func TestProcessTransaction(t *testing.T) {
 }
 
 func TestGetSenderAddress(t *testing.T) {
-	bc, err := NewBlockchain("./test-blockchain-db")
+	bc, err := NewBlockchain("./test-blockchain.db")
 	assert.NoError(t, err)
 	defer bc.Close()
 
@@ -334,7 +334,7 @@ func TestGetSenderAddress(t *testing.T) {
 }
 
 func TestCalculateTxRoot(t *testing.T) {
-	bc, err := NewBlockchain("./test-blockchain-db")
+	bc, err := NewBlockchain("./test-blockchain.db")
 	assert.NoError(t, err)
 	defer bc.Close()
 
@@ -386,7 +386,7 @@ func TestCalculateTxRoot(t *testing.T) {
 }
 
 func TestGetGenesisBlock(t *testing.T) {
-	bc, err := NewBlockchain("./test-blockchain-db")
+	bc, err := NewBlockchain("./test-blockchain.db")
 	assert.NoError(t, err)
 	defer bc.Close()
 
@@ -401,7 +401,7 @@ func TestGetGenesisBlock(t *testing.T) {
 }
 
 func TestGetLatestBlock(t *testing.T) {
-	bc, err := NewBlockchain("./test-blockchain-db")
+	bc, err := NewBlockchain("./test-blockchain.db")
 	assert.NoError(t, err)
 	defer bc.Close()
 
@@ -416,7 +416,7 @@ func TestGetLatestBlock(t *testing.T) {
 }
 
 func TestGetBlockByHeight(t *testing.T) {
-	bc, err := NewBlockchain("./test-blockchain-db")
+	bc, err := NewBlockchain("./test-blockchain.db")
 	assert.NoError(t, err)
 	defer bc.Close()
 
@@ -436,7 +436,7 @@ func TestGetBlockByHeight(t *testing.T) {
 }
 
 func TestGetBlockByHash(t *testing.T) {
-	bc, err := NewBlockchain("./test-blockchain-db")
+	bc, err := NewBlockchain("./test-blockchain.db")
 	assert.NoError(t, err)
 	defer bc.Close()
 
@@ -473,7 +473,7 @@ func TestGetBlockByHash(t *testing.T) {
 }
 
 func TestGetTransaction(t *testing.T) {
-	bc, err := NewBlockchain("./test-blockchain-db")
+	bc, err := NewBlockchain("./test-blockchain.db")
 	assert.NoError(t, err)
 	defer bc.Close()
 
@@ -502,7 +502,7 @@ func TestGetTransaction(t *testing.T) {
 }
 
 func TestGetAccount(t *testing.T) {
-	bc, err := NewBlockchain("./test-blockchain-db")
+	bc, err := NewBlockchain("./test-blockchain.db")
 	assert.NoError(t, err)
 	defer bc.Close()
 
@@ -529,7 +529,7 @@ func TestGetAccount(t *testing.T) {
 }
 
 func TestGetValidator(t *testing.T) {
-	bc, err := NewBlockchain("./test-blockchain-db")
+	bc, err := NewBlockchain("./test-blockchain.db")
 	assert.NoError(t, err)
 	defer bc.Close()
 
@@ -561,7 +561,7 @@ func TestGetValidator(t *testing.T) {
 }
 
 func TestGetAllValidators(t *testing.T) {
-	bc, err := NewBlockchain("./test-blockchain-db")
+	bc, err := NewBlockchain("./test-blockchain.db")
 	assert.NoError(t, err)
 	defer bc.Close()
 
@@ -595,7 +595,7 @@ func TestGetAllValidators(t *testing.T) {
 }
 
 func TestGetLatestHeight(t *testing.T) {
-	bc, err := NewBlockchain("./test-blockchain-db")
+	bc, err := NewBlockchain("./test-blockchain.db")
 	assert.NoError(t, err)
 	defer bc.Close()
 
@@ -609,7 +609,7 @@ func TestGetLatestHeight(t *testing.T) {
 }
 
 func TestGetStateRoots(t *testing.T) {
-	bc, err := NewBlockchain("./test-blockchain-db")
+	bc, err := NewBlockchain("./test-blockchain.db")
 	assert.NoError(t, err)
 	defer bc.Close()
 
@@ -628,7 +628,7 @@ func TestGetStateRoots(t *testing.T) {
 }
 
 func TestSetAccount(t *testing.T) {
-	bc, err := NewBlockchain("./test-blockchain-db")
+	bc, err := NewBlockchain("./test-blockchain.db")
 	assert.NoError(t, err)
 	defer bc.Close()
 
@@ -656,7 +656,7 @@ func TestSetAccount(t *testing.T) {
 }
 
 func TestCalculateTxRootPublic(t *testing.T) {
-	bc, err := NewBlockchain("./test-blockchain-db")
+	bc, err := NewBlockchain("./test-blockchain.db")
 	assert.NoError(t, err)
 	defer bc.Close()
 
