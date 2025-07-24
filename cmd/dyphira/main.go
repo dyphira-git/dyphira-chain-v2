@@ -19,7 +19,9 @@ import (
 	"dyphira-node/core"
 	"dyphira-node/crypto"
 	"dyphira-node/network"
+	"dyphira-node/state"
 	"dyphira-node/types"
+	"encoding/hex"
 )
 
 // parseAddress parses an address from either hex or Bech32 format
@@ -55,6 +57,16 @@ func main() {
 		getBlock(args)
 	case "validators":
 		listValidators(args)
+	case "stake":
+		stakeTokens(args)
+	case "unstake":
+		unstakeTokens(args)
+	case "delegate":
+		delegateTokens(args)
+	case "undelegate":
+		undelegateTokens(args)
+	case "claim-rewards":
+		claimRewards(args)
 	case "genesis":
 		createGenesis(args)
 	case "connect":
@@ -81,6 +93,11 @@ func printUsage() {
 	fmt.Println("  balance --address ADDR                                   Get account balance")
 	fmt.Println("  block --height HEIGHT                                    Get block by height")
 	fmt.Println("  validators                                               List all validators")
+	fmt.Println("  stake --private-key KEY --amount AMT --fee FEE           Stake tokens to become validator")
+	fmt.Println("  unstake --private-key KEY --amount AMT --fee FEE         Unstake tokens from validator")
+	fmt.Println("  delegate --private-key KEY --validator VAL --amount AMT --fee FEE  Delegate tokens to validator")
+	fmt.Println("  undelegate --private-key KEY --validator VAL --amount AMT --fee FEE  Undelegate tokens from validator")
+	fmt.Println("  claim-rewards --private-key KEY --validator VAL --fee FEE  Claim staking rewards")
 	fmt.Println("  genesis                                                  Create genesis block")
 	fmt.Println("  connect --peer PEER_ADDR                                 Connect to a peer")
 	fmt.Println("  peers                                                    List connected peers")
@@ -123,45 +140,53 @@ func startNode(args []string) {
 	// Create consensus engine
 	dpos := consensus.NewDPoS(blockchain)
 
-	// Add sample validators for testing
-	log.Println("Adding sample validators to consensus system...")
-	for i := 0; i < 10; i++ {
-		// Create a sample key pair for each validator
-		keyPair, err := crypto.GenerateKeyPair()
-		if err != nil {
-			log.Printf("Failed to generate key pair for validator %d: %v", i, err)
-			continue
+	// Load existing validators from blockchain storage
+	log.Println("Loading existing validators from blockchain storage...")
+	existingValidators, err := blockchain.GetAllValidators()
+	if err != nil {
+		log.Printf("Failed to load validators from blockchain: %v", err)
+		existingValidators = []*state.Validator{} // Empty slice if error
+	}
+
+	// Add existing validators to consensus system
+	for i, validator := range existingValidators {
+		// Convert state.Validator to types.Validator
+		typesValidator := &types.Validator{
+			Address:        validator.Address,
+			SelfStake:      validator.SelfStake,
+			DelegatedStake: validator.DelegatedStake,
+			Reputation:     validator.Reputation,
+			IsOnline:       validator.IsOnline,
+			LastSeen:       validator.LastSeen,
+			Delegators:     validator.Delegators,
+			TotalRewards:   validator.TotalRewards,
+			BlocksProposed: validator.BlocksProposed,
+			BlocksApproved: validator.BlocksApproved,
 		}
 
-		validator := &types.Validator{
-			Address:        keyPair.GetAddress(),
-			SelfStake:      big.NewInt(int64(10000 + i*1000)), // Varying stakes
-			DelegatedStake: big.NewInt(int64(5000 + i*500)),   // Varying delegations
-			Reputation:     uint64(50 + i*5),                  // Varying reputation
-			IsOnline:       true,
-			LastSeen:       time.Now().Unix(),
-			Delegators:     make(map[crypto.Address]*big.Int),
-			TotalRewards:   big.NewInt(0),
-			BlocksProposed: 0,
-			BlocksApproved: 0,
-		}
-
-		err = dpos.AddValidator(validator)
+		err = dpos.AddValidator(typesValidator)
 		if err != nil {
-			log.Printf("Failed to add validator %d: %v", i, err)
+			log.Printf("Failed to add existing validator %d: %v", i, err)
 		} else {
-			log.Printf("Added validator %d: %s (stake: %s, reputation: %d)",
-				i+1, validator.Address.String(), validator.GetTotalStake().String(), validator.Reputation)
+			log.Printf("Loaded validator %d: %s (stake: %s, reputation: %d)",
+				i+1, typesValidator.Address.String(), typesValidator.GetTotalStake().String(), typesValidator.Reputation)
 		}
 	}
 
-	// Elect initial committee
-	log.Println("Electing initial committee...")
-	err = dpos.ElectCommittee()
-	if err != nil {
-		log.Printf("Failed to elect initial committee: %v", err)
+	log.Printf("Loaded %d validators from blockchain storage", len(existingValidators))
+
+	// Only elect committee if we have enough validators
+	if len(existingValidators) > 0 {
+		log.Println("Electing initial committee...")
+		err = dpos.ElectCommittee()
+		if err != nil {
+			log.Printf("Failed to elect initial committee: %v", err)
+		} else {
+			committee := dpos.GetCommittee()
+			log.Printf("Initial committee elected with %d members", len(committee))
+		}
 	} else {
-		log.Printf("Initial committee elected with %d members", len(dpos.GetCommittee()))
+		log.Println("No validators found. Committee election will occur when validators stake tokens.")
 	}
 
 	// Create P2P node
@@ -726,4 +751,512 @@ func syncState(args []string) {
 	time.Sleep(5 * time.Second)
 
 	log.Printf("State sync completed")
+}
+
+// stakeTokens stakes tokens to become a validator
+func stakeTokens(args []string) {
+	fs := flag.NewFlagSet("stake", flag.ExitOnError)
+	privateKey := fs.String("private-key", "", "Private key (hex)")
+	amount := fs.String("amount", "0", "Amount to stake")
+	fee := fs.String("fee", "1000", "Transaction fee")
+	fs.Parse(args)
+
+	if *privateKey == "" || *amount == "0" {
+		log.Fatal("--private-key and --amount are required")
+	}
+
+	// Parse amount and fee
+	amountInt, ok := new(big.Int).SetString(*amount, 10)
+	if !ok {
+		log.Fatal("Invalid amount")
+	}
+	feeInt, ok := new(big.Int).SetString(*fee, 10)
+	if !ok {
+		log.Fatal("Invalid fee")
+	}
+
+	// Create blockchain instance
+	blockchain, err := core.NewBlockchain("./dyphira.db")
+	if err != nil {
+		log.Fatalf("Failed to create blockchain: %v", err)
+	}
+	defer blockchain.Close()
+
+	// Create key pair from private key
+	privateKeyBytes, err := hex.DecodeString(*privateKey)
+	if err != nil {
+		log.Fatalf("Failed to decode private key: %v", err)
+	}
+	keyPair, err := crypto.KeyPairFromPrivateKey(privateKeyBytes)
+	if err != nil {
+		log.Fatalf("Failed to create key pair: %v", err)
+	}
+
+	// Get account to get nonce
+	account, err := blockchain.GetAccount(keyPair.GetAddress())
+	if err != nil {
+		log.Fatalf("Failed to get account: %v", err)
+	}
+
+	// Create stake transaction
+	tx := types.NewStakeTransaction(account.Nonce, amountInt, feeInt)
+
+	// Sign transaction
+	err = tx.Sign(keyPair)
+	if err != nil {
+		log.Fatalf("Failed to sign transaction: %v", err)
+	}
+
+	// Validate transaction
+	err = blockchain.ValidateTransaction(tx)
+	if err != nil {
+		log.Fatalf("Transaction validation failed: %v", err)
+	}
+
+	// Process transaction
+	err = blockchain.ProcessTransaction(tx)
+	if err != nil {
+		log.Fatalf("Failed to process transaction: %v", err)
+	}
+
+	// Get updated account
+	updatedAccount, err := blockchain.GetAccount(keyPair.GetAddress())
+	if err != nil {
+		log.Fatalf("Failed to get updated account: %v", err)
+	}
+
+	// Get validator info
+	validator, err := blockchain.GetValidator(keyPair.GetAddress())
+	if err != nil {
+		log.Printf("Validator not found (may be first stake): %v", err)
+	}
+
+	// Output result
+	result := map[string]interface{}{
+		"transaction_hash": tx.Hash().String(),
+		"stake_amount":     amountInt.String(),
+		"fee":              feeInt.String(),
+		"new_balance":      updatedAccount.Balance.String(),
+		"new_nonce":        updatedAccount.Nonce,
+	}
+
+	if validator != nil {
+		result["validator_self_stake"] = validator.SelfStake.String()
+		totalStake := new(big.Int).Add(validator.SelfStake, validator.DelegatedStake)
+		result["validator_total_stake"] = totalStake.String()
+	}
+
+	output, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		log.Fatalf("Failed to marshal result: %v", err)
+	}
+
+	fmt.Println(string(output))
+}
+
+// unstakeTokens unstakes tokens from validator position
+func unstakeTokens(args []string) {
+	fs := flag.NewFlagSet("unstake", flag.ExitOnError)
+	privateKey := fs.String("private-key", "", "Private key (hex)")
+	amount := fs.String("amount", "0", "Amount to unstake")
+	fee := fs.String("fee", "1000", "Transaction fee")
+	fs.Parse(args)
+
+	if *privateKey == "" || *amount == "0" {
+		log.Fatal("--private-key and --amount are required")
+	}
+
+	// Parse amount and fee
+	amountInt, ok := new(big.Int).SetString(*amount, 10)
+	if !ok {
+		log.Fatal("Invalid amount")
+	}
+	feeInt, ok := new(big.Int).SetString(*fee, 10)
+	if !ok {
+		log.Fatal("Invalid fee")
+	}
+
+	// Create blockchain instance
+	blockchain, err := core.NewBlockchain("./dyphira.db")
+	if err != nil {
+		log.Fatalf("Failed to create blockchain: %v", err)
+	}
+	defer blockchain.Close()
+
+	// Create key pair from private key
+	privateKeyBytes, err := hex.DecodeString(*privateKey)
+	if err != nil {
+		log.Fatalf("Failed to decode private key: %v", err)
+	}
+	keyPair, err := crypto.KeyPairFromPrivateKey(privateKeyBytes)
+	if err != nil {
+		log.Fatalf("Failed to create key pair: %v", err)
+	}
+
+	// Get account to get nonce
+	account, err := blockchain.GetAccount(keyPair.GetAddress())
+	if err != nil {
+		log.Fatalf("Failed to get account: %v", err)
+	}
+
+	// Create unstake transaction
+	tx := types.NewUnstakeTransaction(account.Nonce, amountInt, feeInt)
+
+	// Sign transaction
+	err = tx.Sign(keyPair)
+	if err != nil {
+		log.Fatalf("Failed to sign transaction: %v", err)
+	}
+
+	// Validate transaction
+	err = blockchain.ValidateTransaction(tx)
+	if err != nil {
+		log.Fatalf("Transaction validation failed: %v", err)
+	}
+
+	// Process transaction
+	err = blockchain.ProcessTransaction(tx)
+	if err != nil {
+		log.Fatalf("Failed to process transaction: %v", err)
+	}
+
+	// Get updated account
+	updatedAccount, err := blockchain.GetAccount(keyPair.GetAddress())
+	if err != nil {
+		log.Fatalf("Failed to get updated account: %v", err)
+	}
+
+	// Get validator info
+	validator, err := blockchain.GetValidator(keyPair.GetAddress())
+	if err != nil {
+		log.Printf("Validator not found: %v", err)
+	}
+
+	// Output result
+	result := map[string]interface{}{
+		"transaction_hash": tx.Hash().String(),
+		"unstake_amount":   amountInt.String(),
+		"fee":              feeInt.String(),
+		"new_balance":      updatedAccount.Balance.String(),
+		"new_nonce":        updatedAccount.Nonce,
+		"validator":        validator.Address.String(),
+	}
+
+	if validator != nil {
+		result["validator_self_stake"] = validator.SelfStake.String()
+		totalStake := new(big.Int).Add(validator.SelfStake, validator.DelegatedStake)
+		result["validator_total_stake"] = totalStake.String()
+	}
+
+	output, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		log.Fatalf("Failed to marshal result: %v", err)
+	}
+
+	fmt.Println(string(output))
+}
+
+// delegateTokens delegates tokens to a validator
+func delegateTokens(args []string) {
+	fs := flag.NewFlagSet("delegate", flag.ExitOnError)
+	privateKey := fs.String("private-key", "", "Private key (hex)")
+	validator := fs.String("validator", "", "Validator address")
+	amount := fs.String("amount", "0", "Amount to delegate")
+	fee := fs.String("fee", "1000", "Transaction fee")
+	fs.Parse(args)
+
+	if *privateKey == "" || *validator == "" || *amount == "0" {
+		log.Fatal("--private-key, --validator, and --amount are required")
+	}
+
+	// Parse validator address
+	validatorAddr, err := parseAddress(*validator)
+	if err != nil {
+		log.Fatalf("Invalid validator address: %v", err)
+	}
+
+	// Parse amount and fee
+	amountInt, ok := new(big.Int).SetString(*amount, 10)
+	if !ok {
+		log.Fatal("Invalid amount")
+	}
+	feeInt, ok := new(big.Int).SetString(*fee, 10)
+	if !ok {
+		log.Fatal("Invalid fee")
+	}
+
+	// Create blockchain instance
+	blockchain, err := core.NewBlockchain("./dyphira.db")
+	if err != nil {
+		log.Fatalf("Failed to create blockchain: %v", err)
+	}
+	defer blockchain.Close()
+
+	// Create key pair from private key
+	privateKeyBytes, err := hex.DecodeString(*privateKey)
+	if err != nil {
+		log.Fatalf("Failed to decode private key: %v", err)
+	}
+	keyPair, err := crypto.KeyPairFromPrivateKey(privateKeyBytes)
+	if err != nil {
+		log.Fatalf("Failed to create key pair: %v", err)
+	}
+
+	// Get account to get nonce
+	account, err := blockchain.GetAccount(keyPair.GetAddress())
+	if err != nil {
+		log.Fatalf("Failed to get account: %v", err)
+	}
+
+	// Create delegate transaction
+	tx := types.NewDelegateTransaction(account.Nonce, validatorAddr, amountInt, feeInt)
+
+	// Sign transaction
+	err = tx.Sign(keyPair)
+	if err != nil {
+		log.Fatalf("Failed to sign transaction: %v", err)
+	}
+
+	// Validate transaction
+	err = blockchain.ValidateTransaction(tx)
+	if err != nil {
+		log.Fatalf("Transaction validation failed: %v", err)
+	}
+
+	// Process transaction
+	err = blockchain.ProcessTransaction(tx)
+	if err != nil {
+		log.Fatalf("Failed to process transaction: %v", err)
+	}
+
+	// Get updated account
+	updatedAccount, err := blockchain.GetAccount(keyPair.GetAddress())
+	if err != nil {
+		log.Fatalf("Failed to get updated account: %v", err)
+	}
+
+	// Get delegation info
+	delegation, err := blockchain.GetDelegation(keyPair.GetAddress(), validatorAddr)
+	if err != nil {
+		log.Printf("Delegation not found: %v", err)
+	}
+
+	// Output result
+	result := map[string]interface{}{
+		"transaction_hash": tx.Hash().String(),
+		"delegate_amount":  amountInt.String(),
+		"fee":              feeInt.String(),
+		"new_balance":      updatedAccount.Balance.String(),
+		"new_nonce":        updatedAccount.Nonce,
+		"validator":        validatorAddr.String(),
+	}
+
+	if delegation != nil {
+		result["total_delegated"] = delegation.Amount.String()
+	}
+
+	output, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		log.Fatalf("Failed to marshal result: %v", err)
+	}
+
+	fmt.Println(string(output))
+}
+
+// undelegateTokens undelegates tokens from a validator
+func undelegateTokens(args []string) {
+	fs := flag.NewFlagSet("undelegate", flag.ExitOnError)
+	privateKey := fs.String("private-key", "", "Private key (hex)")
+	validator := fs.String("validator", "", "Validator address")
+	amount := fs.String("amount", "0", "Amount to undelegate")
+	fee := fs.String("fee", "1000", "Transaction fee")
+	fs.Parse(args)
+
+	if *privateKey == "" || *validator == "" || *amount == "0" {
+		log.Fatal("--private-key, --validator, and --amount are required")
+	}
+
+	// Parse validator address
+	validatorAddr, err := parseAddress(*validator)
+	if err != nil {
+		log.Fatalf("Invalid validator address: %v", err)
+	}
+
+	// Parse amount and fee
+	amountInt, ok := new(big.Int).SetString(*amount, 10)
+	if !ok {
+		log.Fatal("Invalid amount")
+	}
+	feeInt, ok := new(big.Int).SetString(*fee, 10)
+	if !ok {
+		log.Fatal("Invalid fee")
+	}
+
+	// Create blockchain instance
+	blockchain, err := core.NewBlockchain("./dyphira.db")
+	if err != nil {
+		log.Fatalf("Failed to create blockchain: %v", err)
+	}
+	defer blockchain.Close()
+
+	// Create key pair from private key
+	privateKeyBytes, err := hex.DecodeString(*privateKey)
+	if err != nil {
+		log.Fatalf("Failed to decode private key: %v", err)
+	}
+	keyPair, err := crypto.KeyPairFromPrivateKey(privateKeyBytes)
+	if err != nil {
+		log.Fatalf("Failed to create key pair: %v", err)
+	}
+
+	// Get account to get nonce
+	account, err := blockchain.GetAccount(keyPair.GetAddress())
+	if err != nil {
+		log.Fatalf("Failed to get account: %v", err)
+	}
+
+	// Create undelegate transaction
+	tx := types.NewUndelegateTransaction(account.Nonce, validatorAddr, amountInt, feeInt)
+
+	// Sign transaction
+	err = tx.Sign(keyPair)
+	if err != nil {
+		log.Fatalf("Failed to sign transaction: %v", err)
+	}
+
+	// Validate transaction
+	err = blockchain.ValidateTransaction(tx)
+	if err != nil {
+		log.Fatalf("Transaction validation failed: %v", err)
+	}
+
+	// Process transaction
+	err = blockchain.ProcessTransaction(tx)
+	if err != nil {
+		log.Fatalf("Failed to process transaction: %v", err)
+	}
+
+	// Get updated account
+	updatedAccount, err := blockchain.GetAccount(keyPair.GetAddress())
+	if err != nil {
+		log.Fatalf("Failed to get updated account: %v", err)
+	}
+
+	// Get delegation info
+	delegation, err := blockchain.GetDelegation(keyPair.GetAddress(), validatorAddr)
+	if err != nil {
+		log.Printf("Delegation not found: %v", err)
+	}
+
+	// Output result
+	result := map[string]interface{}{
+		"transaction_hash":  tx.Hash().String(),
+		"undelegate_amount": amountInt.String(),
+		"fee":               feeInt.String(),
+		"new_balance":       updatedAccount.Balance.String(),
+		"new_nonce":         updatedAccount.Nonce,
+		"validator":         validatorAddr.String(),
+	}
+
+	if delegation != nil {
+		result["remaining_delegated"] = delegation.Amount.String()
+	}
+
+	output, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		log.Fatalf("Failed to marshal result: %v", err)
+	}
+
+	fmt.Println(string(output))
+}
+
+// claimRewards claims staking rewards
+func claimRewards(args []string) {
+	fs := flag.NewFlagSet("claim-rewards", flag.ExitOnError)
+	privateKey := fs.String("private-key", "", "Private key (hex)")
+	validator := fs.String("validator", "", "Validator address")
+	fee := fs.String("fee", "1000", "Transaction fee")
+	fs.Parse(args)
+
+	if *privateKey == "" || *validator == "" {
+		log.Fatal("--private-key and --validator are required")
+	}
+
+	// Parse validator address
+	validatorAddr, err := parseAddress(*validator)
+	if err != nil {
+		log.Fatalf("Invalid validator address: %v", err)
+	}
+
+	// Parse fee
+	feeInt, ok := new(big.Int).SetString(*fee, 10)
+	if !ok {
+		log.Fatal("Invalid fee")
+	}
+
+	// Create blockchain instance
+	blockchain, err := core.NewBlockchain("./dyphira.db")
+	if err != nil {
+		log.Fatalf("Failed to create blockchain: %v", err)
+	}
+	defer blockchain.Close()
+
+	// Create key pair from private key
+	privateKeyBytes, err := hex.DecodeString(*privateKey)
+	if err != nil {
+		log.Fatalf("Failed to decode private key: %v", err)
+	}
+	keyPair, err := crypto.KeyPairFromPrivateKey(privateKeyBytes)
+	if err != nil {
+		log.Fatalf("Failed to create key pair: %v", err)
+	}
+
+	// Get account to get nonce
+	account, err := blockchain.GetAccount(keyPair.GetAddress())
+	if err != nil {
+		log.Fatalf("Failed to get account: %v", err)
+	}
+
+	// Create claim rewards transaction
+	tx := types.NewClaimRewardsTransaction(account.Nonce, validatorAddr, feeInt)
+
+	// Sign transaction
+	err = tx.Sign(keyPair)
+	if err != nil {
+		log.Fatalf("Failed to sign transaction: %v", err)
+	}
+
+	// Validate transaction
+	err = blockchain.ValidateTransaction(tx)
+	if err != nil {
+		log.Fatalf("Transaction validation failed: %v", err)
+	}
+
+	// Process transaction
+	err = blockchain.ProcessTransaction(tx)
+	if err != nil {
+		log.Fatalf("Failed to process transaction: %v", err)
+	}
+
+	// Get updated account
+	updatedAccount, err := blockchain.GetAccount(keyPair.GetAddress())
+	if err != nil {
+		log.Fatalf("Failed to get updated account: %v", err)
+	}
+
+	// Output result
+	result := map[string]interface{}{
+		"transaction_hash": tx.Hash().String(),
+		"fee":              feeInt.String(),
+		"new_balance":      updatedAccount.Balance.String(),
+		"new_nonce":        updatedAccount.Nonce,
+		"validator":        validatorAddr.String(),
+	}
+
+	output, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		log.Fatalf("Failed to marshal result: %v", err)
+	}
+
+	fmt.Println(string(output))
 }

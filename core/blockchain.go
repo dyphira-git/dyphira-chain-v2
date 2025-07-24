@@ -595,12 +595,17 @@ func (bc *Blockchain) GetStateRoots() (crypto.Hash, crypto.Hash, crypto.Hash) {
 	return bc.stateMachines.GetStateRoots()
 }
 
-// SetAccount sets an account in the state machine (for testing purposes)
+// SetAccount sets an account in the blockchain
 func (bc *Blockchain) SetAccount(address crypto.Address, account *state.Account) error {
 	return bc.stateMachines.SetAccount(address, account)
 }
 
-// CalculateTxRoot calculates the transaction root for a list of transactions
+// GetDelegation retrieves a delegation from the state machines
+func (bc *Blockchain) GetDelegation(delegator, validator crypto.Address) (*types.Delegation, error) {
+	return bc.stateMachines.GetDelegation(delegator, validator)
+}
+
+// CalculateTxRoot calculates the transaction root
 func (bc *Blockchain) CalculateTxRoot(transactions []types.Transaction) crypto.Hash {
 	return bc.calculateTxRoot(transactions)
 }
